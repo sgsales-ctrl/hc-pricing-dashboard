@@ -91,6 +91,8 @@
       <label style="margin:0">Nights <select id="fDays"><option value="7">Next 7 days</option><option value="30" selected>Next 30 days</option><option value="90">All 90 days</option></select></label>
       <button id="approveAll">Approve all shown</button>
       <button id="sendAll" class="primary" hidden>Send approved shown</button>
+      <button id="exportXlsx" title="Download the suggestions shown as an Excel file">Export Excel</button>
+      <button id="exportPdf" title="Download the suggestions shown as a PDF">Export PDF</button>
       <span class="help"><span id="sendHelp">Approving saves your decision. Nothing reaches Cloudbeds while sending is off.</span> Sold-out room types are left out.</span>
     </div>
     <div class="help" id="suggCount" style="margin:0 0 8px 4px">
@@ -309,6 +311,187 @@
     if (!confirm(`Send ${todo.length} approved prices shown to Cloudbeds?\n\nThis changes the live prices in Cloudbeds.`)) return;
     await callFn("send", `Sending ${todo.length} prices to Cloudbeds`, { ids: todo.map((s) => s.id) });
   };
+
+  // ---------- Export: the suggestions shown (with the filters picked) to Excel or PDF ----------
+  // Excel is written here (no extra library). PDF uses jsPDF + AutoTable, loaded only when needed.
+  const PDF_LIBS = [
+    ["https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js", "sha384-qovJwSBbRDPP5cEjCp8S0UP66wrvnjaa60XMOGzTNanrThcrGfXfnZkvgY8N1KT3"],
+    ["https://cdn.jsdelivr.net/npm/jspdf-autotable@5.0.9/dist/jspdf.plugin.autotable.min.js", "sha384-A77YsHWitrPuAj8E0AuB033EXzymUxIajnWKPzrrzqFoYYSCEpFennDUjMG2R1L3"],
+  ];
+  const selText = (id) => { const s = $(id); return (s.options[s.selectedIndex] || {}).text || ""; };
+  const signed = (d) => (d > 0 ? "+" : "") + (d ? money(d).replace("S$-", "-S$") : "S$0");
+  function exportInfo() {
+    const made = new Date().toLocaleString("en-SG", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const filters = `Property: ${selText("fProp")} | Show: ${selText("fStatus")} | Nights: ${selText("fDays")}`;
+    const base = `HC price suggestions ${sgToday()}` + ($("fProp").value ? " " + $("fProp").value : "");
+    return { made, filters, base, by: (user && user.email) || "" };
+  }
+  function exportRows() {
+    return shown.map((s) => ({
+      night: s.stay_date, prop: s.property_code, room: s.room_name,
+      now: s.current_rate == null ? null : Number(s.current_rate), sug: s.suggested_rate == null ? null : Number(s.suggested_rate),
+      diff: Number(s.suggested_rate ?? 0) - Number(s.current_rate ?? 0),
+      status: s.status === "failed" ? "not sent" : s.status,
+      final: s.final_rate != null && s.status !== "rejected" ? Number(s.final_rate) : null,
+      why: s.reason || "", flags: s.flags || "", by: s.decided_by_email || "", at: s.decided_at ? fmtTime(s.decided_at) : "",
+      send: s.send_message ? s.send_message + (s.sent_at ? " " + fmtTime(s.sent_at) : "") : "",
+    }));
+  }
+  function download(blob, name) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+
+  // A small .xlsx writer: one sheet, title rows, a frozen header with filters, S$ and date formats.
+  function makeXlsx(o) {
+    const xmlEsc = (v) => String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const col = (i) => String.fromCharCode(65 + i);
+    const STYLE = { title: 1, head: 2, date: 3, money: 4, text: 5, wrap: 6, change: 7 };
+    const serial = (d) => (Date.parse(d + "T00:00:00Z") - Date.UTC(1899, 11, 30)) / 86400000;
+    const str = (ref, v, s) => `<c r="${ref}" t="inlineStr" s="${s}"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`;
+    const numc = (ref, v, s) => `<c r="${ref}" s="${s}"><v>${v}</v></c>`;
+    const H = 4, last = H + o.rows.length, lastCol = col(o.head.length - 1);
+    let rowsXml = `<row r="1">${str("A1", o.title, STYLE.title)}</row><row r="2">${str("A2", o.sub, 0)}</row>`;
+    rowsXml += `<row r="${H}">` + o.head.map((h, i) => str(col(i) + H, h, STYLE.head)).join("") + "</row>";
+    o.rows.forEach((r, k) => {
+      const n = H + 1 + k;
+      rowsXml += `<row r="${n}">` + r.map((v, i) => {
+        if (v == null || v === "") return "";
+        const t = o.types[i], ref = col(i) + n;
+        if (t === "date") return numc(ref, serial(v), STYLE.date);
+        if (t === "money" || t === "change") return Number.isFinite(Number(v)) ? numc(ref, Number(v), STYLE[t]) : str(ref, v, STYLE.text);
+        return str(ref, v, t === "wrap" ? STYLE.wrap : STYLE.text);
+      }).join("") + "</row>";
+    });
+    const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+    const head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+    const files = {
+      "[Content_Types].xml": head + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+      "_rels/.rels": head + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      "xl/workbook.xml": head + `<workbook ${NS} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(o.sheet)}" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'${xmlEsc(o.sheet)}'!$A$${H}:$${lastCol}$${last}</definedName><definedName name="_xlnm.Print_Titles" localSheetId="0">'${xmlEsc(o.sheet)}'!$${H}:$${H}</definedName></definedNames></workbook>`,
+      "xl/_rels/workbook.xml.rels": head + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+      "xl/styles.xml": head + `<styleSheet ${NS}><numFmts count="3"><numFmt numFmtId="164" formatCode="&quot;S$&quot;#,##0;-&quot;S$&quot;#,##0"/><numFmt numFmtId="165" formatCode="ddd d mmm yyyy"/><numFmt numFmtId="166" formatCode="+&quot;S$&quot;#,##0;-&quot;S$&quot;#,##0;&quot;S$&quot;0"/></numFmts>` +
+        '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font></fonts>' +
+        '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE3EFEB"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="8">' +
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+        '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+        '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
+        '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="left" vertical="top"/></xf>' +
+        '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top"/></xf>' +
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top"/></xf>' +
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
+        '<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top"/></xf>' +
+        '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
+      "xl/worksheets/sheet1.xml": head + `<worksheet ${NS}><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${lastCol}${last}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="${H}" topLeftCell="A${H + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>` +
+        "<cols>" + o.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("") + "</cols>" +
+        `<sheetData>${rowsXml}</sheetData><autoFilter ref="A${H}:${lastCol}${last}"/><pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`,
+    };
+    return new Blob([zipStore(files)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+  // Zip without compression (all an .xlsx needs).
+  function zipStore(files) {
+    const enc = new TextEncoder();
+    const crcTable = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+    const crc32 = (b) => { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = crcTable[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+    const d = new Date();
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    const parts = [], central = [];
+    let offset = 0;
+    for (const [name, text] of Object.entries(files)) {
+      const nameB = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true); local.setUint16(8, 0, true);
+      local.setUint16(10, time, true); local.setUint16(12, date, true); local.setUint32(14, crc, true);
+      local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, nameB.length, true); local.setUint16(28, 0, true);
+      parts.push(new Uint8Array(local.buffer), nameB, data);
+      const cen = new DataView(new ArrayBuffer(46));
+      cen.setUint32(0, 0x02014b50, true); cen.setUint16(4, 20, true); cen.setUint16(6, 20, true); cen.setUint16(8, 0x0800, true); cen.setUint16(10, 0, true);
+      cen.setUint16(12, time, true); cen.setUint16(14, date, true); cen.setUint32(16, crc, true); cen.setUint32(20, data.length, true); cen.setUint32(24, data.length, true);
+      cen.setUint16(28, nameB.length, true); cen.setUint16(30, 0, true); cen.setUint16(32, 0, true); cen.setUint16(34, 0, true); cen.setUint16(36, 0, true);
+      cen.setUint32(38, 0, true); cen.setUint32(42, offset, true);
+      central.push(new Uint8Array(cen.buffer), nameB);
+      offset += 30 + nameB.length + data.length;
+    }
+    const cenSize = central.reduce((n, p) => n + p.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, Object.keys(files).length, true); end.setUint16(10, Object.keys(files).length, true);
+    end.setUint32(12, cenSize, true); end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, new Uint8Array(end.buffer)]);
+  }
+
+  function exportXlsx() {
+    if (!shown.length) return say("Nothing to export: no suggestions are shown.", true);
+    const info = exportInfo();
+    const rows = exportRows().map((r) => [r.night, r.prop, r.room, r.now, r.sug, r.diff, r.status, r.final, r.why, r.flags, r.by, r.at, r.send]);
+    download(makeXlsx({
+      sheet: "Suggestions", title: "Heritage Collection Pricing Dashboard: price suggestions",
+      sub: `Made ${info.made}${info.by ? " by " + info.by : ""} | ${info.filters} | ${rows.length} rows`,
+      head: ["Night", "Property", "Room", "Now (S$)", "Suggested (S$)", "Change (S$)", "Status", "Final price (S$)", "Why", "Flags", "Decided by", "Decided at", "Cloudbeds"],
+      types: ["date", "text", "text", "money", "money", "change", "text", "money", "wrap", "wrap", "text", "text", "wrap"],
+      widths: [16, 9, 30, 10, 14, 12, 10, 15, 90, 45, 28, 16, 45], rows,
+    }), info.base + ".xlsx");
+    say(`Excel file downloaded: ${rows.length} rows.`);
+  }
+
+  function loadScript(src, integrity) {
+    return new Promise((ok, fail) => {
+      const s = document.createElement("script");
+      s.src = src; s.integrity = integrity; s.crossOrigin = "anonymous";
+      s.onload = ok; s.onerror = () => fail(new Error("could not load " + src.split("/npm/")[1]));
+      document.head.appendChild(s);
+    });
+  }
+  let pdfReady = null;
+  const loadPdfLibs = () => (pdfReady = pdfReady || (async () => { for (const [src, sri] of PDF_LIBS) await loadScript(src, sri); })().catch((e) => { pdfReady = null; throw e; }));
+  // The PDF's built-in font covers Western European letters only: simplify anything else.
+  const pdfText = (v) => String(v ?? "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/…/g, "...")
+    .normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^\x09\x0A\x20-\x7E\xA0-\xFF]/g, "?");
+  async function exportPdf() {
+    if (!shown.length) return say("Nothing to export: no suggestions are shown.", true);
+    say("Making the PDF…");
+    try { await loadPdfLibs(); } catch (e) { return say("PDF export failed: " + e.message + ". Check the internet connection and try again.", true); }
+    const info = exportInfo();
+    const doc = new window.jspdf.jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    const W = doc.internal.pageSize.getWidth(), Hh = doc.internal.pageSize.getHeight();
+    doc.setFont("helvetica", "bold"); doc.setFontSize(13);
+    doc.text(pdfText("Heritage Collection Pricing Dashboard: price suggestions"), 30, 34);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(100);
+    doc.text(pdfText(`Made ${info.made}${info.by ? " by " + info.by : ""}  |  ${info.filters}  |  ${shown.length} rows`), 30, 48);
+    doc.setTextColor(0);
+    const body = exportRows().map((r) => [
+      fmtDate(r.night), r.prop, r.room, money(r.now), money(r.sug), signed(r.diff),
+      r.status + (r.final != null ? " " + money(r.final) : ""),
+      r.why + (r.flags ? "\nFLAG: " + r.flags : ""),
+      [r.by, r.at, r.send].filter(Boolean).join("\n"),
+    ].map(pdfText));
+    const opts = {
+      startY: 58, margin: { left: 30, right: 30, top: 30, bottom: 30 }, theme: "grid",
+      head: [["Night", "Prop.", "Room", "Now", "Suggested", "Change", "Decision", "Why", "Decided by / Cloudbeds"]], body,
+      styles: { font: "helvetica", fontSize: 7, cellPadding: 3, overflow: "linebreak", valign: "top", lineColor: [228, 231, 236], lineWidth: 0.4 },
+      headStyles: { fillColor: [31, 111, 92], textColor: 255, fontStyle: "bold" },
+      columnStyles: { 0: { cellWidth: 52 }, 1: { cellWidth: 30 }, 2: { cellWidth: 82 }, 3: { cellWidth: 38, halign: "right" }, 4: { cellWidth: 46, halign: "right", fontStyle: "bold" },
+        5: { cellWidth: 40, halign: "right" }, 6: { cellWidth: 56 }, 7: { cellWidth: "auto" }, 8: { cellWidth: 100 } },
+      didParseCell: (d) => {
+        if (d.section !== "body") return;
+        if (d.column.index === 5) d.cell.styles.textColor = /^\+/.test(d.cell.raw) ? [6, 118, 71] : /^-/.test(d.cell.raw) ? [180, 35, 24] : [0, 0, 0];
+        if (d.column.index === 7 && /\nFLAG: /.test(d.cell.raw)) d.cell.styles.textColor = [120, 53, 4];
+      },
+      didDrawPage: () => {
+        doc.setFontSize(7); doc.setTextColor(130);
+        doc.text("Page " + doc.internal.getNumberOfPages(), W - 30, Hh - 14, { align: "right" });
+        doc.setTextColor(0);
+      },
+    };
+    if (typeof doc.autoTable === "function") doc.autoTable(opts); else window.autoTable(doc, opts);
+    doc.save(info.base + ".pdf");
+    say(`PDF downloaded: ${shown.length} rows.`);
+  }
+  $("exportXlsx").onclick = exportXlsx;
+  $("exportPdf").onclick = exportPdf;
 
   // ---------- Data check ----------
   async function loadData() {
