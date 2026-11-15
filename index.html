@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Heritage Collection Pricing Dashboard</title>
+<style>
+  :root { --ink:#1d2433; --muted:#667085; --line:#e4e7ec; --bg:#f7f8fa; --card:#fff; --accent:#1f6f5c; --warn:#b54708; --bad:#b42318; --good:#067647; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 20px; background:var(--card); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  .muted { color:var(--muted); }
+  main, .box { max-width:1200px; margin:16px auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .narrow { max-width:420px; margin:48px auto; }
+  label { display:block; font-weight:600; margin:10px 0 4px; }
+  input, select { font:inherit; padding:7px 9px; border:1px solid #cfd4dc; border-radius:7px; background:#fff; }
+  .narrow input { width:100%; }
+  button { font:inherit; padding:7px 12px; border-radius:7px; border:1px solid #cfd4dc; background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .bar { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; background:#eef2f6; }
+  .pill.off { background:#fef0c7; color:#93370d; } .pill.on { background:#d1fadf; color:var(--good); }
+  nav { display:flex; gap:4px; margin:4px 0 12px; }
+  nav button { border:none; background:none; padding:8px 12px; border-bottom:2px solid transparent; border-radius:0; }
+  nav button.active { border-bottom-color:var(--accent); font-weight:600; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; background:var(--card); }
+  th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; white-space:nowrap; }
+  td.wrap { white-space:normal; min-width:240px; }
+  th { font-size:12px; color:var(--muted); font-weight:600; background:#fafbfc; position:sticky; top:0; }
+  td.num, th.num { text-align:right; }
+  .up { color:var(--good); } .down { color:var(--bad); }
+  .flag { color:var(--warn); font-size:12px; }
+  .ok { color:var(--good); font-weight:600; } .no { color:var(--bad); font-weight:600; }
+  #msg { min-height:20px; }
+  .err { color:var(--bad); }
+  .actions button { padding:4px 8px; font-size:12px; }
+  .help { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Heritage Collection Pricing Dashboard</h1>
+  <span id="who" class="muted"></span>
+  <button id="logout" hidden>Sign out</button>
+</header>
+
+<!-- One-time setup on this browser (the publishable key is the public key for web pages) -->
+<section id="setup" class="card narrow" hidden>
+  <h2 style="margin-top:0">First-time setup</h2>
+  <p class="help">Paste your project's <b>publishable key</b>: Supabase → Project Settings → API Keys → Publishable key (starts with <code>sb_publishable_</code>). This key is meant for web pages. Never paste the secret key here.</p>
+  <label for="cfgUrl">Project URL</label>
+  <input id="cfgUrl" value="https://gggfsswecfrfwbqgbfxl.supabase.co">
+  <label for="cfgKey">Publishable key</label>
+  <input id="cfgKey" placeholder="sb_publishable_...">
+  <p><button class="primary" id="saveCfg">Save</button> <span id="cfgMsg" class="err"></span></p>
+</section>
+
+<section id="login" class="card narrow" hidden>
+  <h2 style="margin-top:0">Sign in</h2>
+  <label for="email">Email</label><input id="email" type="email" autocomplete="username">
+  <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+  <p><button class="primary" id="signin">Sign in</button> <span id="loginMsg" class="err"></span></p>
+  <p class="help">Logins are created by your admin in Supabase (Authentication → Users).</p>
+</section>
+
+<main id="app" hidden>
+  <div class="card bar">
+    <span>Sending to Cloudbeds: <span id="sending" class="pill">…</span></span>
+    <span>Last Cloudbeds pull: <b id="lastPull">…</b></span>
+    <button id="refresh">Refresh Cloudbeds data</button>
+    <button id="makeSugg">Make suggestions</button>
+    <span id="msg" class="muted"></span>
+  </div>
+  <div id="noComp" class="card help" hidden>No competitor prices yet: Lighthouse is not connected, so suggestions use your occupancy and events only, and keep today's price otherwise.</div>
+
+  <nav>
+    <button data-tab="sugg" class="active">Suggestions</button>
+    <button data-tab="data">Data check</button>
+    <button data-tab="log">Log</button>
+  </nav>
+
+  <section id="tab-sugg">
+    <div class="card bar">
+      <label style="margin:0">Property <select id="fProp"><option value="">All</option><option>BQQ</option><option>KG</option><option>CN</option></select></label>
+      <label style="margin:0">Show <select id="fStatus"><option value="todo">To do: decide or send</option><option value="">Everything today</option><option value="approved,changed">Approved or changed</option><option value="rejected">Rejected</option><option value="sent,failed">Sent, or could not send</option></select></label>
+      <label style="margin:0">Nights <select id="fDays"><option value="7">Next 7 days</option><option value="30" selected>Next 30 days</option><option value="90">All 90 days</option></select></label>
+      <button id="approveAll">Approve all shown</button>
+      <button id="sendAll" class="primary" hidden>Send approved shown</button>
+      <span class="help"><span id="sendHelp">Approving saves your decision. Nothing reaches Cloudbeds while sending is off.</span> Sold-out room types are left out.</span>
+    </div>
+    <div class="help" id="suggCount" style="margin:0 0 8px 4px">
+    </div>
+    <div class="scroll card" style="padding:0"><table id="suggTable"></table></div>
+  </section>
+
+  <section id="tab-data" hidden>
+    <div class="card"><h3 style="margin-top:0">Room types matched to Cloudbeds</h3><div class="scroll"><table id="roomTable"></table></div></div>
+    <div class="card"><h3 style="margin-top:0">Occupancy, next 30 nights</h3><p class="help">From Cloudbeds rooms left. Compare a few nights with Cloudbeds to check.</p><div class="scroll"><table id="occTable"></table></div></div>
+  </section>
+
+  <section id="tab-log" hidden>
+    <div class="card scroll" style="padding:0"><table id="logTable"></table></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
+<script src="config.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const money = (n) => (n == null ? "" : "S$" + Math.round(Number(n)).toLocaleString());
+  const pct = (n) => (n == null ? "" : Math.round(Number(n) * 100) + "%");
+  const sgToday = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  const fmtDate = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-SG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  const fmtTime = (t) => (t ? new Date(t).toLocaleString("en-SG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+
+  // Settings: a config.js file (when hosted) or this browser's saved setup.
+  function getCfg() {
+    const c = window.HC_CONFIG || {};
+    let url = c.url, key = c.key;
+    try { url = url || localStorage.getItem("hc_url"); key = key || localStorage.getItem("hc_key"); } catch (e) {}
+    return { url, key };
+  }
+  let sb, user, rooms = [], sendMode = "off";
+
+  function show(id) { ["setup", "login", "app"].forEach((x) => ($(x).hidden = x !== id)); }
+  function say(t, isErr) { $("msg").textContent = t || ""; $("msg").className = isErr ? "err" : "muted"; }
+
+  async function start() {
+    const cfg = getCfg();
+    if (!cfg.url || !cfg.key) return show("setup");
+    sb = window.supabase.createClient(cfg.url, cfg.key);
+    const { data } = await sb.auth.getSession();
+    if (!data.session) return show("login");
+    user = data.session.user;
+    $("who").textContent = user.email; $("logout").hidden = false;
+    show("app");
+    await Promise.all([loadStatus(), loadRooms()]);
+    await loadSugg();
+  }
+
+  $("saveCfg").onclick = () => {
+    const url = $("cfgUrl").value.trim(), key = $("cfgKey").value.trim();
+    if (!/^https:\/\/[a-z0-9]+\.supabase\.co$/.test(url)) return ($("cfgMsg").textContent = "That doesn't look like a Supabase project URL.");
+    if (/^sb_secret_/.test(key) || /service_role/.test(key)) return ($("cfgMsg").textContent = "That is a SECRET key. Use the publishable key instead.");
+    if (!/^sb_publishable_/.test(key) && !/^eyJ/.test(key)) return ($("cfgMsg").textContent = "That doesn't look like a publishable key.");
+    try { localStorage.setItem("hc_url", url); localStorage.setItem("hc_key", key); } catch (e) { return ($("cfgMsg").textContent = "This browser blocked saving. Try a normal (not private) window."); }
+    start();
+  };
+
+  $("signin").onclick = async () => {
+    $("loginMsg").textContent = "";
+    const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pw").value });
+    if (error) return ($("loginMsg").textContent = error.message);
+    $("pw").value = ""; start();
+  };
+  $("logout").onclick = async () => { await sb.auth.signOut(); location.reload(); };
+
+  document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => {
+    document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
+    ["sugg", "data", "log"].forEach((t) => ($("tab-" + t).hidden = t !== b.dataset.tab));
+    if (b.dataset.tab === "data") loadData();
+    if (b.dataset.tab === "log") loadLog();
+  }));
+
+  async function loadStatus() {
+    const [{ data: s }, { data: l }] = await Promise.all([
+      sb.from("settings").select("value").eq("key", "sending_enabled").maybeSingle(),
+      sb.from("run_log").select("started_at,ok,message").eq("job", "cloudbeds-pull").order("started_at", { ascending: false }).limit(1),
+    ]);
+    const v = String(s?.value || "No").trim().toLowerCase();
+    sendMode = v === "yes" ? "on" : v === "test" ? "test" : "off";
+    $("sending").textContent = sendMode === "on" ? "On" : sendMode === "test" ? "Test: one price at a time" : "Off (suggest only)";
+    $("sending").className = "pill " + (sendMode === "on" ? "on" : "off");
+    $("sendAll").hidden = sendMode !== "on";
+    $("sendHelp").textContent = sendMode === "on" ? "Approve or change prices, then click \"Send approved shown\" to update Cloudbeds."
+      : sendMode === "test" ? "Test mode: approve one price, then click its \"Send to Cloudbeds\" button. Only that one price changes in Cloudbeds."
+      : "Approving saves your decision. Nothing reaches Cloudbeds while sending is off.";
+    const { count: compCount } = await sb.from("competitor_rates").select("stay_date", { count: "exact", head: true }).gte("stay_date", sgToday());
+    $("noComp").hidden = (compCount || 0) > 0;
+    const last = l?.[0];
+    $("lastPull").textContent = last ? fmtTime(last.started_at) + (last.ok === false ? " (failed)" : last.ok ? "" : " (running)") : "never";
+  }
+
+  async function loadRooms() {
+    const { data } = await sb.from("room_types").select("*").order("property_code").order("ia_rate");
+    rooms = data || [];
+  }
+
+  let busy = false;
+  async function callFn(action, label, extra) {
+    if (busy) return;
+    busy = true;
+    say(label + "…");
+    $("refresh").disabled = $("makeSugg").disabled = $("sendAll").disabled = true;
+    try {
+      const { data, error } = await sb.functions.invoke("cloudbeds-pull", { method: "POST", body: Object.assign({ action }, extra || {}) });
+      if (error) {
+        let detail = error.message;
+        try { const j = await error.context.json(); detail = j.message || j.skipped || detail; } catch (e) {}
+        throw new Error(detail);
+      }
+      say((data && (data.skipped || data.message)) || "Done.");
+    } catch (e) {
+      say(label + " failed: " + e.message, true);
+    } finally {
+      busy = false;
+      $("refresh").disabled = $("makeSugg").disabled = $("sendAll").disabled = false;
+      await loadStatus(); await loadRooms(); await loadSugg();
+    }
+  }
+  $("refresh").onclick = () => callFn("pull", "Pulling rates and rooms left from Cloudbeds (read only)");
+  $("makeSugg").onclick = () => callFn("suggest", "Working out suggestions");
+
+  // ---------- Suggestions ----------
+  let shown = [];
+  async function loadSugg() {
+    const p = $("fProp").value, st = $("fStatus").value, days = Number($("fDays").value);
+    const last = new Date(Date.parse(sgToday() + "T00:00:00Z") + (days - 1) * 86400e3).toISOString().slice(0, 10);
+    let all = [];
+    for (let from = 0; from < 10000; from += 1000) {
+      let q = sb.from("suggestions").select("*").eq("run_date", sgToday()).order("stay_date").order("property_code").order("current_rate").order("id").range(from, from + 999);
+      if (p) q = q.eq("property_code", p);
+      const statuses = st === "todo" ? (sendMode === "off" ? ["pending"] : ["pending", "approved", "changed"]) : st ? st.split(",") : null;
+    if (statuses) q = q.in("status", statuses);
+      const { data, error } = await q;
+      if (error) return say(error.message, true);
+      all = all.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    shown = all.filter((s) => s.stay_date <= last);
+    const ups = shown.filter((s) => s.suggested_rate > s.current_rate).length, downs = shown.filter((s) => s.suggested_rate < s.current_rate).length;
+    const later = all.length - shown.length;
+    $("suggCount").textContent = `Showing ${shown.length}: ${ups} up, ${downs} down, ${shown.filter((s) => s.flags).length} flagged.` + (later ? ` ${later} more further ahead (choose "All 90 days" to see them).` : "");
+    const head = '<tr><th>Night</th><th>Property</th><th>Room</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th>Why</th><th>Decision</th></tr>';
+    if (!shown.length) { $("suggTable").innerHTML = head + '<tr><td colspan="8" class="muted">No suggestions here for today yet.</td></tr>'; return; }
+    $("suggTable").innerHTML = head + shown.map((s) => {
+      const diff = (s.suggested_rate ?? 0) - (s.current_rate ?? 0);
+      const dec = s.status === "pending"
+        ? `<span class="actions"><button data-a="approve" data-id="${s.id}">Approve</button> <button data-a="change" data-id="${s.id}">Change</button> <button data-a="reject" data-id="${s.id}">Reject</button></span>`
+        : decisionCell(s);
+      return `<tr><td>${fmtDate(s.stay_date)}</td><td>${esc(s.property_code)}</td><td>${esc(s.room_name)}</td>
+        <td class="num">${money(s.current_rate)}</td><td class="num"><b>${money(s.suggested_rate)}</b></td>
+        <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${diff ? money(diff).replace("S$-", "-S$") : "0"}</td>
+        <td class="wrap">${esc(s.reason)}${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}</td><td>${dec}</td></tr>`;
+    }).join("");
+  }
+  function decisionCell(s) {
+    const label = s.status === "failed" ? '<b class="err">not sent</b>' : `<b>${esc(s.status)}</b>`;
+    const at = s.final_rate != null && s.status !== "rejected" ? " at " + money(s.final_rate) : "";
+    const who = `<div class="help">${esc(s.decided_by_email || "")} ${fmtTime(s.decided_at)}</div>`;
+    const sendNote = s.send_message ? `<div class="${s.status === "failed" ? "flag" : "help"}">${esc(s.send_message)}${s.sent_at ? " " + fmtTime(s.sent_at) : ""}</div>` : "";
+    const canSend = (s.status === "approved" || s.status === "changed") && !s.sent_at && sendMode !== "off";
+    return label + at + who + sendNote + (canSend ? `<div style="margin-top:6px"><button class="primary" data-a="send" data-id="${s.id}">Send to Cloudbeds</button></div>` : "");
+  }
+  $("fProp").onchange = loadSugg; $("fStatus").onchange = loadSugg; $("fDays").onchange = loadSugg;
+
+  function limitsFor(s) {
+    const r = rooms.find((x) => x.cloudbeds_room_type_id === s.cloudbeds_room_type_id);
+    return r ? { min: Number(r.minimum), max: Number(r.maximum) } : null;
+  }
+  async function decide(s, status, finalRate) {
+    const { error } = await sb.from("suggestions").update({
+      status, final_rate: finalRate, decided_by: user.id, decided_by_email: user.email, decided_at: new Date().toISOString(),
+    }).eq("id", s.id).eq("status", "pending");
+    if (error) throw error;
+  }
+  $("suggTable").onclick = async (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const s = shown.find((x) => String(x.id) === b.dataset.id); if (!s) return;
+    try {
+      if (b.dataset.a === "approve") await decide(s, "approved", s.suggested_rate);
+      if (b.dataset.a === "reject") await decide(s, "rejected", null);
+      if (b.dataset.a === "send") {
+        const price = money(s.final_rate ?? s.suggested_rate);
+        if (!confirm(`Send ${price} for ${s.room_name}, ${fmtDate(s.stay_date)} (${s.property_code}) to Cloudbeds?\n\nThis changes the live price in Cloudbeds.`)) return;
+        return await callFn("send", "Sending to Cloudbeds", { ids: [s.id] });
+      }
+      if (b.dataset.a === "change") {
+        const lim = limitsFor(s);
+        const v = prompt(`New price for ${s.room_name}, ${fmtDate(s.stay_date)} (S$)` + (lim ? `\nAllowed: S$${lim.min} to S$${lim.max}` : ""), Math.round(s.suggested_rate));
+        if (v == null) return;
+        const n = Math.round(Number(v));
+        if (!n || (lim && (n < lim.min || n > lim.max))) return alert("That price is outside this room's Minimum and Maximum.");
+        await decide(s, "changed", n);
+      }
+      await loadSugg();
+    } catch (err) { say("Could not save: " + err.message, true); }
+  };
+  $("approveAll").onclick = async () => {
+    const todo = shown.filter((s) => s.status === "pending");
+    if (!todo.length) return;
+    if (!confirm(`Approve all ${todo.length} suggestions shown?`)) return;
+    try {
+      for (let i = 0; i < todo.length; i += 10) await Promise.all(todo.slice(i, i + 10).map((s) => decide(s, "approved", s.suggested_rate)));
+    } catch (err) { say("Could not save: " + err.message, true); }
+    await loadSugg();
+  };
+
+  $("sendAll").onclick = async () => {
+    const todo = shown.filter((s) => (s.status === "approved" || s.status === "changed") && !s.sent_at);
+    if (!todo.length) return say("No approved prices shown that still need sending.", true);
+    if (!confirm(`Send ${todo.length} approved prices shown to Cloudbeds?\n\nThis changes the live prices in Cloudbeds.`)) return;
+    await callFn("send", `Sending ${todo.length} prices to Cloudbeds`, { ids: todo.map((s) => s.id) });
+  };
+
+  // ---------- Data check ----------
+  async function loadData() {
+    await loadRooms();
+    $("roomTable").innerHTML = '<tr><th>Property</th><th>Room (Rate Rules)</th><th>Name in Cloudbeds</th><th>Matched</th><th class="num">Rooms</th><th>Group</th><th class="num">IA Rate</th><th class="num">Minimum</th><th class="num">Maximum</th></tr>' +
+      rooms.map((r) => `<tr><td>${esc(r.property_code)}</td><td>${esc(r.room_name)}${r.is_base ? ' <span class="pill">base</span>' : ""}</td><td>${esc(r.cloudbeds_name)}</td>
+        <td>${r.cloudbeds_room_type_id ? '<span class="ok">Yes</span>' : '<span class="no">Not yet</span>'}</td><td class="num">${r.units ?? ""}</td><td>${esc(r.category)}</td>
+        <td class="num">${money(r.ia_rate)}</td><td class="num">${money(r.minimum)}</td><td class="num">${money(r.maximum)}</td></tr>`).join("");
+    const end = new Date(Date.parse(sgToday() + "T00:00:00Z") + 30 * 86400e3).toISOString().slice(0, 10);
+    const { data: occ } = await sb.from("occupancy").select("*").gte("stay_date", sgToday()).lt("stay_date", end).order("stay_date");
+    const dates = [...new Set((occ || []).map((o) => o.stay_date))];
+    const cell = (d, p) => { const o = (occ || []).find((x) => x.stay_date === d && x.property_code === p); return o ? `${pct(o.occupancy)} <span class="help">(${o.rooms_total - o.rooms_available}/${o.rooms_total})</span>` : ""; };
+    $("occTable").innerHTML = '<tr><th>Night</th><th>BQQ</th><th>KG</th><th>CN</th></tr>' +
+      (dates.length ? dates.map((d) => `<tr><td>${fmtDate(d)}</td><td>${cell(d, "BQQ")}</td><td>${cell(d, "KG")}</td><td>${cell(d, "CN")}</td></tr>`).join("")
+                    : '<tr><td colspan="4" class="muted">No data yet. Click "Refresh Cloudbeds data".</td></tr>');
+  }
+
+  async function loadLog() {
+    const { data } = await sb.from("run_log").select("*").order("started_at", { ascending: false }).limit(30);
+    $("logTable").innerHTML = '<tr><th>Started</th><th>Job</th><th>Result</th><th>Details</th></tr>' +
+      (data || []).map((l) => `<tr><td>${fmtTime(l.started_at)}</td><td>${esc(l.job)}</td><td>${l.ok ? '<span class="ok">OK</span>' : l.ok === false ? '<span class="no">Failed</span>' : "Running"}</td><td class="wrap">${esc(l.message)}</td></tr>`).join("");
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>
