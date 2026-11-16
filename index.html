@@ -504,7 +504,7 @@
     const today = sgToday();
     let all = [];
     for (let from = 0; from < 30000; from += 1000) {
-      const { data, error } = await sb.from("competitor_rates").select("stay_date,hotel,category,price,sold_out,room_name,channel,loaded_at")
+      const { data, error } = await sb.from("competitor_rates").select("stay_date,hotel,category,price,sold_out,room_name,channel,channels,tax_added,loaded_at")
         .gte("stay_date", today).order("stay_date").order("hotel").order("category").range(from, from + 999);
       if (error) return ($("compMsg").textContent = "Could not load: " + error.message);
       all = all.concat(data || []);
@@ -517,15 +517,16 @@
     const order = { Lowest: 0, Single: 1, Standard: 2, Premium: 3, Suite: 4 };
     all.sort((a, b) => a.stay_date.localeCompare(b.stay_date) || a.hotel.localeCompare(b.hotel) || (order[a.category] ?? 9) - (order[b.category] ?? 9));
     const CH = { bookingdotcom: "Booking.com", agoda: "Agoda", expedia: "Expedia", tripdotcom: "Trip.com", branddotcom: "Hotel website" };
+    const chs = (v) => String(v || "").split(",").filter(Boolean).map((c) => CH[c] || c).join(", ");
     const rows = all.map((r) => [r.stay_date, r.hotel, roleOf[r.hotel] || "", r.category === "Lowest" ? "Lowest (any room)" : r.category,
-      r.price == null ? null : Number(r.price), r.channel ? (CH[r.channel] || r.channel) : "", r.room_name || "", r.sold_out ? "Sold out" : "", r.loaded_at ? fmtTime(r.loaded_at) : ""]);
+      r.price == null ? null : Number(r.price), r.channel ? (CH[r.channel] || r.channel) + (r.tax_added ? " (taxes added)" : "") : "", chs(r.channels), r.room_name || "", r.sold_out ? "Sold out" : "", r.loaded_at ? fmtTime(r.loaded_at) : ""]);
     const made = new Date().toLocaleString("en-SG", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
     download(makeXlsx({
       sheet: "Competitor prices", title: "Competitor prices by room category (from Lighthouse)",
-      sub: `Made ${made}${user && user.email ? " by " + user.email : ""} | Lowest of Booking.com, Agoda, Expedia, Trip.com and the hotel website (prices with taxes and fees only), 2-night stay, per night, 2 guests (Single: 1 guest) | ${rows.length} rows`,
-      head: ["Night", "Hotel (as in Lighthouse)", "Role", "Category", "Price (S$)", "Cheapest on", "Room (as in Lighthouse)", "Sold out", "Loaded"],
-      types: ["date", "text", "text", "text", "money", "text", "text", "text", "text"],
-      widths: [16, 44, 18, 18, 11, 14, 50, 10, 16], rows,
+      sub: `Made ${made}${user && user.email ? " by " + user.email : ""} | Lowest of Booking.com, Agoda, Expedia, Trip.com and the hotel website (website prices shown without taxes: 10% service charge and 9% GST added), 2-night stay, per night, 2 guests (Single: 1 guest) | ${rows.length} rows`,
+      head: ["Night", "Hotel (as in Lighthouse)", "Role", "Category", "Price (S$)", "Cheapest on", "Channels with a price", "Room (as in Lighthouse)", "Sold out", "Loaded"],
+      types: ["date", "text", "text", "text", "money", "text", "text", "text", "text", "text"],
+      widths: [16, 44, 18, 18, 11, 22, 34, 50, 10, 16], rows,
     }), `HC competitor prices by category ${today}.xlsx`);
     $("compMsg").textContent = `Downloaded ${rows.length} rows.`;
   }
