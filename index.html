@@ -91,8 +91,7 @@
       <label style="margin:0">Nights <select id="fDays"><option value="7">Next 7 days</option><option value="30" selected>Next 30 days</option><option value="90">All 90 days</option></select></label>
       <button id="approveAll">Approve all shown</button>
       <button id="sendAll" class="primary" hidden>Send approved shown</button>
-      <button id="exportXlsx" title="Download the suggestions shown as an Excel file">Export Excel</button>
-      <button id="exportPdf" title="Download the suggestions shown as a PDF">Export PDF</button>
+      <select id="exportFmt" title="Download the suggestions shown, as Excel or PDF"><option value="" selected>Export…</option><option value="xlsx">Excel (.xlsx)</option><option value="pdf">PDF</option></select>
       <span class="help"><span id="sendHelp">Approving saves your decision. Nothing reaches Cloudbeds while sending is off.</span> Sold-out room types are left out.</span>
     </div>
     <div class="help" id="suggCount" style="margin:0 0 8px 4px">
@@ -490,8 +489,13 @@
     doc.save(info.base + ".pdf");
     say(`PDF downloaded: ${shown.length} rows.`);
   }
-  $("exportXlsx").onclick = exportXlsx;
-  $("exportPdf").onclick = exportPdf;
+  // One Export box: pick Excel or PDF and the file downloads; the box goes back to "Export…".
+  $("exportFmt").onchange = async (e) => {
+    const f = e.target.value;
+    e.target.value = "";
+    if (f === "xlsx") exportXlsx();
+    if (f === "pdf") await exportPdf();
+  };
 
   // ---------- Data check ----------
   async function loadData() {
