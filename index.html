@@ -100,6 +100,7 @@
   </section>
 
   <section id="tab-data" hidden>
+    <div class="card"><h3 style="margin-top:0">Competitor prices by room category</h3><p class="help">Each competitor's cheapest price per night in each room category (Single, Standard, Premium, Suite), as loaded from Lighthouse each morning, with the competitor's own room name. "Lowest" = its cheapest room of any type. Booking.com, 2-night stay, per night including fees; 2 guests (Single: 1 guest). Categories follow the Competitor Rooms list in the pricing rules file.</p><button id="exportComp">Export competitor prices (Excel)</button> <span id="compMsg" class="help"></span></div>
     <div class="card"><h3 style="margin-top:0">Room types matched to Cloudbeds</h3><div class="scroll"><table id="roomTable"></table></div></div>
     <div class="card"><h3 style="margin-top:0">Occupancy, next 30 nights</h3><p class="help">From Cloudbeds rooms left. Compare a few nights with Cloudbeds to check.</p><div class="scroll"><table id="occTable"></table></div></div>
   </section>
@@ -496,6 +497,38 @@
     if (f === "xlsx") exportXlsx();
     if (f === "pdf") await exportPdf();
   };
+
+  // Competitor prices by room category, for checking the like-with-like rule (Excel, next nights from today).
+  async function exportCompetitors() {
+    $("compMsg").textContent = "Loading competitor prices…";
+    const today = sgToday();
+    let all = [];
+    for (let from = 0; from < 30000; from += 1000) {
+      const { data, error } = await sb.from("competitor_rates").select("stay_date,hotel,category,price,sold_out,room_name,loaded_at")
+        .gte("stay_date", today).order("stay_date").order("hotel").order("category").range(from, from + 999);
+      if (error) return ($("compMsg").textContent = "Could not load: " + error.message);
+      all = all.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    if (!all.length) return ($("compMsg").textContent = "No competitor prices loaded yet.");
+    const { data: comps } = await sb.from("competitors").select("property_code,name,lighthouse_name,role").not("role", "is", null);
+    const roleOf = {};
+    (comps || []).forEach((c) => { const k = c.lighthouse_name || c.name; roleOf[k] = (roleOf[k] ? roleOf[k] + ", " : "") + c.property_code + " " + String(c.role).toLowerCase(); });
+    const order = { Lowest: 0, Single: 1, Standard: 2, Premium: 3, Suite: 4 };
+    all.sort((a, b) => a.stay_date.localeCompare(b.stay_date) || a.hotel.localeCompare(b.hotel) || (order[a.category] ?? 9) - (order[b.category] ?? 9));
+    const rows = all.map((r) => [r.stay_date, r.hotel, roleOf[r.hotel] || "", r.category === "Lowest" ? "Lowest (any room)" : r.category,
+      r.price == null ? null : Number(r.price), r.room_name || "", r.sold_out ? "Sold out" : "", r.loaded_at ? fmtTime(r.loaded_at) : ""]);
+    const made = new Date().toLocaleString("en-SG", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    download(makeXlsx({
+      sheet: "Competitor prices", title: "Competitor prices by room category (from Lighthouse)",
+      sub: `Made ${made}${user && user.email ? " by " + user.email : ""} | Booking.com, 2-night stay, per night incl. fees, 2 guests (Single: 1 guest) | ${rows.length} rows`,
+      head: ["Night", "Hotel (as in Lighthouse)", "Role", "Category", "Price (S$)", "Room (as in Lighthouse)", "Sold out", "Loaded"],
+      types: ["date", "text", "text", "text", "money", "text", "text", "text"],
+      widths: [16, 44, 18, 18, 11, 50, 10, 16], rows,
+    }), `HC competitor prices by category ${today}.xlsx`);
+    $("compMsg").textContent = `Downloaded ${rows.length} rows.`;
+  }
+  $("exportComp").onclick = exportCompetitors;
 
   // ---------- Data check ----------
   async function loadData() {
