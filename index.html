@@ -515,8 +515,8 @@
 
   async function loadLog() {
     const { data } = await sb.from("run_log").select("*").order("started_at", { ascending: false }).limit(30);
-    $("logTable").innerHTML = '<tr><th>Started</th><th>Job</th><th>Result</th><th>Details</th></tr>' +
-      (data || []).map((l) => `<tr><td>${fmtTime(l.started_at)}</td><td>${esc(l.job)}</td><td>${l.ok ? '<span class="ok">OK</span>' : l.ok === false ? '<span class="no">Failed</span>' : "Running"}</td><td class="wrap">${esc(l.message)}</td></tr>`).join("");
+    $("logTable").innerHTML = '<tr><th>Started</th><th>Job</th><th>By</th><th>Result</th><th>Details</th></tr>' +
+      (data || []).map((l) => `<tr><td>${fmtTime(l.started_at)}</td><td>${esc(l.job)}</td><td>${l.run_by ? esc(l.run_by) : '<span class="muted">not recorded</span>'}</td><td>${l.ok ? '<span class="ok">OK</span>' : l.ok === false ? '<span class="no">Failed</span>' : "Running"}</td><td class="wrap">${esc(l.message)}</td></tr>`).join("");
   }
 
   start();
