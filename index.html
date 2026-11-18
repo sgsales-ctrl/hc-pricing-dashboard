@@ -46,9 +46,22 @@
   td.w { white-space:normal; min-width:100px; max-width:180px; }
   td.how { white-space:normal; min-width:200px; max-width:300px; }
   td.how summary { cursor:pointer; margin-top:4px; }
-  /* The Decision column stays in view on the right while the table scrolls sideways. */
-  #suggTable tr > :last-child { position:sticky; right:0; background:var(--card); box-shadow:-8px 0 8px -8px rgba(16,24,40,.25); }
-  #suggTable th:last-child { background:#fafbfc; z-index:2; }
+  /* Suggestions: one block per night and property (shared facts once), each room's price worked out step by step (Ann, 18 Nov) */
+  #suggTable tr.gh > td { background:#eef5f2; border-top:3px solid #c9dcd5; padding:12px 14px; white-space:normal; }
+  .ghbar { display:flex; flex-wrap:wrap; gap:6px 26px; align-items:baseline; }
+  .ghbar .t { font-size:16px; font-weight:700; }
+  .k { color:var(--muted); font-size:12px; margin-right:5px; }
+  .ghoff { display:flex; gap:6px; margin-top:6px; align-items:baseline; }
+  #suggTable tr.sub th { position:static; }
+  td.room { font-weight:600; white-space:normal; min-width:150px; max-width:220px; }
+  td.calcw { white-space:normal; min-width:380px; }
+  table.calc { border-collapse:collapse; width:100%; font-size:13px; background:transparent; }
+  table.calc td { padding:3px 8px; border-bottom:1px dashed #eaecf0; white-space:normal; }
+  table.calc td:last-child { text-align:right; white-space:nowrap; font-weight:600; width:70px; }
+  table.calc tr.info td { color:var(--muted); font-style:italic; }
+  table.calc tr.cap td { color:var(--warn); }
+  table.calc tr.up td { color:#1849a9; }
+  table.calc tr.final td { border-bottom:none; background:#ecfdf3; color:var(--good); }
   /* Today's checklist pop-up */
   .modal { position:fixed; inset:0; background:rgba(16,24,40,.45); display:flex; align-items:flex-start; justify-content:center; z-index:50; padding:60px 16px; overflow:auto; }
   .modal[hidden] { display:none; }
@@ -380,29 +393,55 @@
     const ups = shown.filter((s) => s.suggested_rate > s.current_rate).length, downs = shown.filter((s) => s.suggested_rate < s.current_rate).length;
     const later = all.length - shown.length;
     $("suggCount").textContent = `Showing ${shown.length}: ${ups} up, ${downs} down, ${shown.filter((s) => s.flags).length} flagged.` + (later ? ` ${later} more further ahead (choose "All 90 days" to see them).` : "");
-    const head = '<tr><th>Night</th><th>Property</th><th>Room</th><th class="num">Hotel booked</th><th>Room type</th><th>Competitor</th><th>Channel</th><th>Their room</th><th class="num">Their price</th><th>Event</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th>How it was set</th><th>Decision</th></tr>';
-    if (!shown.length) { $("suggTable").innerHTML = head + '<tr><td colspan="15" class="muted">No suggestions here for today yet.</td></tr>'; return; }
-    $("suggTable").innerHTML = head + shown.map((s) => {
+    if (!shown.length) { $("suggTable").innerHTML = '<tr><td class="muted">No suggestions here for today yet.</td></tr>'; return; }
+    // One block per night and property: the shared facts once at the top, then each room with its price worked out step by step.
+    const groups = [];
+    for (const s of shown) { const g = groups[groups.length - 1]; if (g && g[0].stay_date === s.stay_date && g[0].property_code === s.property_code) g.push(s); else groups.push([s]); }
+    const sub = '<tr class="sub"><th>Our room</th><th>Room type booked</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th>How we got the price</th><th>Decision</th></tr>';
+    $("suggTable").innerHTML = groups.map((g) => groupHead(g) + sub + g.map((s) => {
       const diff = (s.suggested_rate ?? 0) - (s.current_rate ?? 0);
       const dec = s.status === "pending"
         ? `<span class="actions"><button data-a="approve" data-id="${s.id}">Approve</button> <button data-a="change" data-id="${s.id}">Change</button> <button data-a="reject" data-id="${s.id}">Reject</button></span>`
         : decisionCell(s);
-      const c = cols(s);
+      const d = s.details || {};
+      const rt = d.left != null && d.units ? `${Math.round((1 - d.left / d.units) * 100)}%<div class="help">${d.left} of ${d.units} left</div>` : d.left != null ? `<div class="help">${d.left} left</div>` : DASH;
       const flag = s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : "";
-      const how = s.details ? `<div>${esc(c.note)}</div><details><summary class="help">Full explanation</summary><div class="help">${esc(s.reason)}</div></details>` : esc(s.reason);
-      return `<tr><td>${fmtDate(s.stay_date)}</td><td>${esc(s.property_code)}</td><td class="w">${esc(s.room_name)}</td>
-        <td class="num">${c.occ || DASH}</td>
-        <td>${c.rtBooked ? c.rtBooked + `<div class="help">${c.left}</div>` : c.left || DASH}</td>
-        <td class="w">${c.comp ? esc(c.comp) + (c.backup ? '<div class="help">backup (key competitor sold out)</div>' : "") : DASH}</td>
-        <td class="w">${c.channel ? esc(c.channel) + (c.chNote ? `<div class="help">${esc(c.chNote)}</div>` : "") : DASH}</td>
-        <td class="w">${c.theirRoom ? esc(c.theirRoom) + (c.cat ? `<div class="help">${esc(c.cat)}</div>` : "") : c.cat ? esc(c.cat) : DASH}</td>
-        <td class="num">${c.theirPrice != null ? money(c.theirPrice) : DASH}</td>
-        <td class="w">${c.event ? `<b>${esc(c.event)}</b>` : c.small ? `<span class="help">Not counted: ${esc(c.small)}</span>` : DASH}</td>
+      const how = (calcTable(s) || (s.details ? `<div>${esc(d.note || "")}</div>` : `<div class="help">${esc(s.reason || "")}</div>`)) + (s.details ? fullWhy(s) : "");
+      return `<tr><td class="room">${esc(s.room_name)}</td><td>${rt}</td>
         <td class="num">${money(s.current_rate)}</td><td class="num"><b>${money(s.suggested_rate)}</b></td>
         <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${diff ? money(diff).replace("S$-", "-S$") : "0"}${-diff >= BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
-        <td class="how">${how}${flag}</td><td>${dec}</td></tr>`;
-    }).join("");
+        <td class="calcw">${how}${flag}</td><td>${dec}</td></tr>`;
+    }).join("")).join("");
   }
+  // The shared facts for one night and property.
+  function groupHead(g) {
+    const s0 = g.find((s) => s.details) || g[0], d = s0.details || {};
+    const infoOf = (s, re) => ((s.details && s.details.calc) || []).find((c) => c.k === "info" && re.test(c.t));
+    const parts = [`<span class="t">${fmtDate(s0.stay_date)} · ${esc(s0.property_code)}</span>`];
+    const slow = g.some((s) => infoOf(s, /^Slow date:/));
+    if (d.occ != null) parts.push(`<span><span class="k">Hotel booked</span><b>${Math.round(d.occ * 100)}%</b>${slow ? ' <span class="pill off">slow date</span>' : ""}</span>`);
+    const names = [...new Set(g.map((s) => s.details && s.details.comp && s.details.comp.name).filter(Boolean))];
+    const follow = [...new Set(g.map((s) => infoOf(s, /, so we follow /)).filter(Boolean).map((c) => "backup: " + c.t.split(", so we follow")[0]))];
+    if (names.length) parts.push(`<span><span class="k">Competitor we follow</span><b>${esc(names.join(", "))}</b>${follow.length ? ` <span class="help">(${esc(follow.join("; "))})</span>` : ""}</span>`);
+    if (s0.details) parts.push(`<span><span class="k">Event</span>${d.event ? `<b>${esc(d.event)}</b>` : d.smallEvent ? `None that counts <span class="help">(${esc(d.smallEvent)})</span>` : "None"}</span>`);
+    const offers = new Map();
+    for (const s of g) { const c = s.details && s.details.comp; if (c) { const key = [c.name, c.cat, c.room, c.price, c.channel].join("|"); if (!offers.has(key)) offers.set(key, c); } }
+    const off = [...offers.values()].map((c) => `<div><b>${money(c.price)}</b> ${names.length > 1 ? esc(c.name) + ": " : ""}${esc(c.room || "")}${c.cat ? ` (${esc(c.cat)})` : ""}` +
+      (c.channel ? ` <span class="help">· ${esc(c.channel)}${c.channels && c.channels.length > 1 ? `, cheapest of ${c.channels.length} channels` : ""}${c.taxAdded ? ", taxes added" : ""}</span>` : "") + "</div>").join("");
+    return `<tr class="gh"><td colspan="7"><div class="ghbar">${parts.join("")}</div>${off ? `<div class="ghoff"><span class="k">Their price${offers.size > 1 ? "s" : ""}</span><div>${off}</div></div>` : ""}</td></tr>`;
+  }
+  // The price worked out step by step. In the Suggestions blocks the slow-date and backup lines are in the block's header, so they are left out here.
+  function calcTable(s, all) {
+    const calc = s.details && s.details.calc;
+    if (!calc || !calc.length) return "";
+    const rows = all ? calc : calc.filter((c) => !(c.k === "info" && (/^Slow date:/.test(c.t) || /, so we follow /.test(c.t))));
+    let h = rows.map((c) => `<tr class="${c.k || ""}"><td>${esc(c.t)}</td><td>${c.p != null ? money(c.p) : ""}</td></tr>`).join("");
+    const fin = calc[calc.length - 1];
+    if (fin && fin.p != null && s.suggested_rate != null && Math.round(fin.p) !== Math.round(Number(s.suggested_rate))) h = h.replace(/ class="final"/g, "") + `<tr class="final"><td>Change too small, so today's price stays</td><td>${money(s.suggested_rate)}</td></tr>`;
+    return `<table class="calc">${h}</table>`;
+  }
+  const calcText = (s) => ((s.details && s.details.calc) || []).map((c) => c.t + (c.p != null ? ": " + money(c.p) : "")).join("\n");
+  const fullWhy = (s) => `<details><summary class="help">Full explanation</summary><div class="help">${esc(s.reason || "")}</div></details>`;
   // The Why split into columns (Ann, 18 Nov). Suggestions made before 18 Nov have no details: those show the full Why only.
   const DASH = '<span class="muted">—</span>';
   function cols(s) {
@@ -540,7 +579,7 @@
       diff: Number(s.suggested_rate ?? 0) - Number(s.current_rate ?? 0),
       status: s.status === "failed" ? "not sent" : s.status,
       final: s.final_rate != null && s.status !== "rejected" ? Number(s.final_rate) : null,
-      why: s.reason || "", flags: s.flags || "", by: s.decided_by_email || "", at: s.decided_at ? fmtTime(s.decided_at) : "", c: cols(s),
+      why: s.reason || "", flags: s.flags || "", by: s.decided_by_email || "", at: s.decided_at ? fmtTime(s.decided_at) : "", c: cols(s), calc: calcText(s),
       send: s.send_message ? s.send_message + (s.sent_at ? " " + fmtTime(s.sent_at) : "") : "",
     }));
   }
@@ -635,7 +674,7 @@
     const info = exportInfo();
     const rows = exportRows().map((r) => [r.night, r.prop, r.room, r.c.occ, r.c.rtBooked, r.c.left, r.c.comp + (r.c.backup ? " (backup)" : ""), [r.c.channel, r.c.chNote].filter(Boolean).join(", "),
       [r.c.theirRoom, r.c.cat ? "(" + r.c.cat + ")" : ""].filter(Boolean).join(" "), r.c.theirPrice, r.c.event || (r.c.small ? "Not counted: " + r.c.small : ""),
-      r.now, r.sug, r.diff, r.c.note, r.status, r.final, r.why, r.flags, r.by, r.at, r.send]);
+      r.now, r.sug, r.diff, r.calc || r.c.note, r.status, r.final, r.why, r.flags, r.by, r.at, r.send]);
     download(makeXlsx({
       sheet: "Suggestions", title: "Heritage Collection Pricing Dashboard: price suggestions",
       sub: `Made ${info.made}${info.by ? " by " + info.by : ""} | ${info.filters} | ${rows.length} rows`,
@@ -679,7 +718,7 @@
       r.c.event || (r.c.small ? "Not counted: " + r.c.small : ""),
       money(r.now), money(r.sug), signed(r.diff),
       [r.status + (r.final != null ? " " + money(r.final) : ""), r.by, r.at, r.send].filter(Boolean).join("\n"),
-      (r.c.note ? r.c.note + "\n\n" : "") + r.why + (r.flags ? "\nFLAG: " + r.flags : ""),
+      ((r.calc || r.c.note) ? (r.calc || r.c.note) + "\n\n" : "") + r.why + (r.flags ? "\nFLAG: " + r.flags : ""),
     ].map(pdfText));
     const opts = {
       startY: 58, margin: { left: 30, right: 30, top: 30, bottom: 30 }, theme: "grid",
@@ -799,7 +838,7 @@
         <td class="num">${money(s.current_rate)}</td><td class="num"><b>${r.price != null ? money(r.price) : DASH}</b></td>
         <td class="num ${r.diff > 0 ? "up" : r.diff < 0 ? "down" : ""}">${r.price != null ? signed(r.diff) : DASH}${r.diff <= -BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
         <td>${esc(r.decision)}</td><td class="w">${esc(r.cb)}</td>
-        <td class="record">${r.note ? `<b>${esc(r.note)}</b>` : ""}${r.facts ? `<div class="rec-facts">${esc(r.facts)}</div>` : ""}<div class="rec-why">${esc(s.reason || "")}</div>${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}${s.decision_note ? `<div class="reconf">${esc(s.decision_note)}</div>` : ""}</td></tr>`;
+        <td class="record">${calcTable(s, true) || (r.note ? `<b>${esc(r.note)}</b>` : "")}${r.facts ? `<div class="rec-facts">${esc(r.facts)}</div>` : ""}<div class="rec-why">${esc(s.reason || "")}</div>${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}${s.decision_note ? `<div class="reconf">${esc(s.decision_note)}</div>` : ""}</td></tr>`;
     }).join("");
   }
   // One price decision as a record: who, when, what changed, and the facts behind it.
@@ -822,7 +861,7 @@
     const rows = logRows.map((s) => {
       const r = recOf(s), c = cols(s);
       return [r.when, r.by, s.stay_date, s.property_code, s.room_name, s.current_rate == null ? null : Number(s.current_rate), r.price, r.price == null ? null : r.diff, r.decision, s.decision_note || "", r.cb,
-        r.note, c.occ, c.rtBooked ? c.rtBooked + " (" + c.left + ")" : c.left, c.comp + (c.backup ? " (backup)" : ""), [c.channel, c.chNote].filter(Boolean).join(", "),
+        calcText(s) || r.note, c.occ, c.rtBooked ? c.rtBooked + " (" + c.left + ")" : c.left, c.comp + (c.backup ? " (backup)" : ""), [c.channel, c.chNote].filter(Boolean).join(", "),
         [c.theirRoom, c.cat ? "(" + c.cat + ")" : ""].filter(Boolean).join(" "), c.theirPrice, c.event || (c.small ? "Not counted: " + c.small : ""), s.reason || "", s.flags || ""];
     });
     download(makeXlsx({
