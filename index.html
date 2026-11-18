@@ -71,9 +71,11 @@
 <main id="app" hidden>
   <div class="card bar">
     <span>Sending to Cloudbeds: <span id="sending" class="pill">…</span></span>
-    <span>Last Cloudbeds pull: <b id="lastPull">…</b></span>
+    <span>Cloudbeds updated: <b id="lastPull">…</b> <span class="muted">(every 15 min)</span></span>
+    <span>Competitor prices: <b id="lastComp">…</b></span>
     <button id="refresh">Refresh Cloudbeds data</button>
     <button id="makeSugg">Make suggestions</button>
+    <button id="updComp">Update competitor prices</button>
     <span id="msg" class="muted"></span>
   </div>
   <div id="noComp" class="card help" hidden>No competitor prices yet: Lighthouse is not connected, so suggestions use your occupancy and events only, and keep today's price otherwise.</div>
@@ -100,7 +102,8 @@
   </section>
 
   <section id="tab-data" hidden>
-    <div class="card"><h3 style="margin-top:0">Competitor prices by room category</h3><p class="help">Each competitor's cheapest price per night in each room category (Single, Standard, Premium, Suite), as loaded from Lighthouse each morning, with the competitor's own room name. "Lowest" = its cheapest room of any type. Booking.com, 2-night stay, per night including fees; 2 guests (Single: 1 guest). Categories follow the Competitor Rooms list in the pricing rules file.</p><button id="exportComp">Export competitor prices (Excel)</button> <span id="compMsg" class="help"></span></div>
+    <div class="card"><h3 style="margin-top:0">Update competitor prices: one-time setup</h3><p class="help">1. Show your bookmarks bar in Chrome (Ctrl+Shift+B, or Cmd+Shift+B on a Mac).<br>2. Drag this button onto the bookmarks bar: <a id="bmLink" href="#" class="pill on" style="text-decoration:none">Load to HC Pricing</a><br>3. Each day: click <b>Update competitor prices</b> at the top of this page. Lighthouse opens in a new tab (log in if asked). Click the <b>Load to HC Pricing</b> bookmark there. It takes about 30 seconds, then shows "done".<br>The code it uses works once, within 15 minutes. Lighthouse updates competitor prices about once a day, so once a day is enough.</p></div>
+    <div class="card"><h3 style="margin-top:0">Competitor prices by room category</h3><p class="help">Each competitor's cheapest price per night in each room category (Single, Standard, Premium, Suite), as loaded from Lighthouse with the "Update competitor prices" button, with the competitor's own room name. "Lowest" = its cheapest room of any type. Booking.com, 2-night stay, per night including fees; 2 guests (Single: 1 guest). Categories follow the Competitor Rooms list in the pricing rules file.</p><button id="exportComp">Export competitor prices (Excel)</button> <span id="compMsg" class="help"></span></div>
     <div class="card"><h3 style="margin-top:0">Room types matched to Cloudbeds</h3><div class="scroll"><table id="roomTable"></table></div></div>
     <div class="card"><h3 style="margin-top:0">Occupancy, next 30 nights</h3><p class="help">From Cloudbeds rooms left. Compare a few nights with Cloudbeds to check.</p><div class="scroll"><table id="occTable"></table></div></div>
   </section>
@@ -172,9 +175,11 @@
   }));
 
   async function loadStatus() {
-    const [{ data: s }, { data: l }] = await Promise.all([
+    const [{ data: s }, { data: l }, { data: cp }, { data: lc }] = await Promise.all([
       sb.from("settings").select("value").eq("key", "sending_enabled").maybeSingle(),
       sb.from("run_log").select("started_at,ok,message").eq("job", "cloudbeds-pull").order("started_at", { ascending: false }).limit(1),
+      sb.from("cloudbeds_rates").select("pulled_at").order("pulled_at", { ascending: false }).limit(1),
+      sb.from("competitor_rates").select("loaded_at").order("loaded_at", { ascending: false }).limit(1),
     ]);
     const v = String(s?.value || "No").trim().toLowerCase();
     sendMode = v === "yes" ? "on" : v === "test" ? "test" : "off";
@@ -187,7 +192,9 @@
     const { count: compCount } = await sb.from("competitor_rates").select("stay_date", { count: "exact", head: true }).gte("stay_date", sgToday());
     $("noComp").hidden = (compCount || 0) > 0;
     const last = l?.[0];
-    $("lastPull").textContent = last ? fmtTime(last.started_at) + (last.ok === false ? " (failed)" : last.ok ? "" : " (running)") : "never";
+    const cbAt = cp && cp[0] && cp[0].pulled_at;
+    $("lastPull").textContent = cbAt ? fmtTime(cbAt) + (last && last.ok === false && last.started_at > cbAt ? " (last try failed)" : "") : "never";
+    $("lastComp").textContent = lc && lc[0] && lc[0].loaded_at ? fmtTime(lc[0].loaded_at) : "never";
   }
 
   async function loadRooms() {
@@ -219,6 +226,23 @@
   }
   $("refresh").onclick = () => callFn("pull", "Pulling rates and rooms left from Cloudbeds (read only)");
   $("makeSugg").onclick = () => callFn("suggest", "Working out suggestions");
+
+  // Competitor prices: get a one-time code (copied for you), open Lighthouse, then the "Load to HC Pricing" bookmark does the rest.
+  const LH_URL = "https://app.mylighthouse.com/hotel/248088/rates?compsetId=1&los=2&maxPersons=2&rateParam=lowest&view=table";
+  const BOOKMARK = "(async () => {\nconst APP = 'https://gggfsswecfrfwbqgbfxl.supabase.co/functions/v1/cloudbeds-pull';\nconst UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (!/(^|\\.)mylighthouse\\.com$/.test(location.hostname)) { alert('HC Pricing: open Lighthouse (app.mylighthouse.com) first, then click this bookmark.'); return; }\nlet code = '';\ntry { code = (await navigator.clipboard.readText()).trim(); } catch (e) {  }\nif (!UUID.test(code)) code = (prompt('HC Pricing: paste the code from the dashboard (\"Update competitor prices\" button)') || '').trim();\nif (!UUID.test(code)) { alert('HC Pricing: no code found. In the HC Pricing dashboard click \"Update competitor prices\" first, then click this bookmark again.'); return; }\nconst box = document.createElement('div');\nbox.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;background:#1f6b5c;color:#fff;padding:14px 18px;border-radius:10px;font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.3);max-width:380px;cursor:default';\ndocument.body.appendChild(box);\nconst say = (t) => { box.textContent = 'HC Pricing: ' + t; };\nconst done = (ok, t) => { box.style.background = ok ? '#1f6b5c' : '#a33'; box.style.cursor = 'pointer'; say(t + ' (click to close)'); box.onclick = () => box.remove(); };\ntry {\nconst marks = new RegExp('[' + String.fromCharCode(8206, 8207) + ']', 'g');\nconst start = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);\nconst end = new Date(Date.parse(start + 'T00:00:00Z') + 89 * 86400e3).toISOString().slice(0, 10);\nconst dates = [];\nfor (let i = 0; i < 90; i++) dates.push(new Date(Date.parse(start + 'T00:00:00Z') + i * 86400e3).toISOString().slice(0, 10));\nconst names = {};\nconst nameOf = async (id) => {\nif (!names[id]) {\nconst h = await fetch('/api/v3/hotelinfos/?id=' + id, { credentials: 'include' }).then((x) => x.json()).catch(() => ({}));\nnames[id] = String(((h.hotelinfos || [])[0] || {}).name || id).replace(marks, '').trim();\n}\nreturn names[id];\n};\nconst q = async (hotel, ota, rt, pp) => {\nconst r = await fetch('/apigateway/v1/app/rates/?ota=' + ota + '&los=2&mealtype=0&persons=' + pp + '&roomtype=' + rt + '&membershiptype=0&compset_ids=1&platform=-1&meta=nested&bar=false&flexible=false&rate_type=0&from_date_range_start=' + start + '&from_date_range_end=' + end + '&hotel_id=' + hotel, { credentials: 'include' });\nif (!r.ok) throw new Error('Lighthouse answered ' + r.status + ' (are you logged in?)');\nreturn r.json();\n};\nconst lowest = {};\nconst rows = [];\nconst fails = [];\nlet offers = 0;\nfor (const [hotel, code2] of [[248088, 'BQQ'], [248089, 'CN']]) {\nsay('reading ' + code2 + ' competitor prices on 5 channels\u2026');\nconst bj = await q(hotel, 'bookingdotcom', 'all', 2);\nfor (const p of (bj.periods || [])) {\nfor (const [id, arr] of Object.entries(p.rates || {})) {\nconst a = (arr || [])[0];\nconst n = await nameOf(id);\nlowest[n] = lowest[n] || {};\nconst v = a && a.value > 0 ? String(Math.round(a.value * 100) / 100) : (a && /soldout/i.test(a.message || '') ? 'S' : '');\nif (!(p.day in lowest[n]) || lowest[n][p.day] === '') lowest[n][p.day] = v;\n}\n}\nconst best = {};\nfor (const ota of ['bookingdotcom', 'agoda', 'expedia', 'tripdotcom', 'branddotcom']) {\nawait Promise.all([['single', 1], ['standard', 2], ['premium', 2], ['suite', 2], ['all', 2]].map(async ([rt, pp]) => {\nlet j;\ntry { j = await q(hotel, ota, rt, pp); } catch (e) { fails.push(code2 + ' ' + ota + ' ' + rt); return; }\nfor (const p of (j.periods || [])) {\nfor (const [id, arr] of Object.entries(p.rates || {})) {\nconst a = (arr || [])[0];\nif (!a || !(a.value > 0) || !a.room_name) continue;\nconst add = (a.other_taxes_incl ? 1 : 1.10) * (a.vat_incl ? 1 : 1.09);\noffers++;\nconst v = a.value * add;\nconst room = String(a.room_name).replace(marks, '').trim().slice(0, 120);\nconst k = id + '|' + p.day + '|' + rt + (rt === 'all' ? '' : '|' + room);\nconst b = best[k] || (best[k] = { id, day: p.day, v: Infinity, chs: new Set() });\nb.chs.add(ota);\nif (v < b.v) Object.assign(b, { v, ota, room, cat: rt === 'all' ? 'ALL' : (a.cema_category || ''), tax: add > 1 ? 1 : 0 });\n}\n}\n}));\n}\nfor (const b of Object.values(best)) rows.push([await nameOf(b.id), b.day, b.room, b.cat, Math.round(b.v * 100) / 100, b.ota, [...b.chs].sort().join(','), b.tax]);\n}\nsay('reading events and public holidays\u2026');\nconst sg = Date.now() + 8 * 3600e3;\nconst evStart = new Date(sg - 30 * 86400e3).toISOString().slice(0, 10), evEnd = new Date(sg + 92 * 86400e3).toISOString().slice(0, 10);\nconst events = [];\nfor (const [h, c] of [[248088, 'BQQ'], [248089, 'CN']]) {\nconst ev = await (await fetch('/apigateway/v1/app/events/?hotel_id=' + h + '&from_date_range_start=' + evStart + '&from_date_range_end=' + evEnd, { credentials: 'include' })).json();\nfor (const e of (ev.events || [])) if (!e.is_cancelled) events.push({ id: String(e.id), hotel: c, name: e.name, category: e.category, start: e.start_date, end: e.end_date, visitors: e.visitors || null, importance: e.importance || null, holiday: false });\nconst ho = await (await fetch('/apigateway/v1/app/holidays/?from_date_range_start=' + evStart + '&from_date_range_end=' + evEnd + '&hotel_id=' + h, { credentials: 'include' })).json();\nfor (const x of (ho.holidays || [])) events.push({ id: 'holiday-' + c + '-' + x.date + '-' + x.name, hotel: c, name: x.name, category: 'holiday', start: x.date, end: x.date, visitors: null, importance: 2, holiday: true });\n}\nconst hotels = Object.keys(lowest).map((n) => ({ n, v: dates.map((d) => lowest[n][d] ?? '') }));\nsay('sending ' + rows.length + ' prices to the HC Pricing app\u2026 (up to a minute)');\nconst r = await fetch(APP + '?action=lhload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket: code, start, hotels, events, rooms: rows, relevance: [] }) });\nconst j = await r.json().catch(() => ({}));\nlet fresh = [];\ntry {\nconst known = new Set(((await (await fetch(APP + '?action=eventnames')).json()).known) || []);\nconst key = (n) => String(n || '').toLowerCase().replace(/\\s+/g, ' ').trim();\nfresh = [...new Set(events.filter((e) => !e.holiday && ((e.importance || 0) >= 2 || (e.visitors || 0) >= 20000) && !known.has(key(e.name))).map((e) => e.name))];\n} catch (e) {  }\nif (!r.ok) return done(false, 'not loaded: ' + (j.message || 'status ' + r.status) + (r.status === 401 ? ' Click \"Update competitor prices\" in the dashboard for a new code.' : ''));\ndone(true, 'done. ' + (j.message || '') + (fails.length ? ' Not read: ' + fails.join(', ') + '.' : '') + (fresh.length ? ' New big events not checked yet (ask Claude): ' + fresh.slice(0, 5).join('; ') + '.' : ''));\n} catch (e) {\ndone(false, 'problem: ' + (e && e.message ? e.message : e));\n}\n})();";
+  $("bmLink").href = "javascript:" + encodeURIComponent(BOOKMARK);
+  $("bmLink").onclick = (e) => { e.preventDefault(); alert("Drag this button onto your bookmarks bar (don't click it here). Then use it in the Lighthouse tab."); };
+  $("updComp").onclick = async () => {
+    say("Getting a one-time code…");
+    try {
+      const { data, error } = await sb.functions.invoke("cloudbeds-pull", { method: "POST", body: { action: "ticket" } });
+      if (error || !data || !data.ticket) throw new Error((error && error.message) || (data && data.message) || "no code");
+      let copied = false;
+      try { await navigator.clipboard.writeText(data.ticket); copied = true; } catch (e) {}
+      const tab = window.open(LH_URL, "_blank");
+      say((copied ? "Code copied. " : "Copy this code: " + data.ticket + ". ") + (tab ? "In the Lighthouse tab that just opened" : "Open Lighthouse (" + LH_URL + ")") + ", click your \"Load to HC Pricing\" bookmark. The code works once, within 15 minutes.");
+    } catch (e) { say("Could not get a code: " + e.message, true); }
+  };
 
   // ---------- Suggestions ----------
   let shown = [];
