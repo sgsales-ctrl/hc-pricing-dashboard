@@ -365,7 +365,7 @@
         <td class="num">${c.occ || DASH}</td>
         <td>${c.rtBooked ? c.rtBooked + `<div class="help">${c.left}</div>` : c.left || DASH}</td>
         <td class="w">${c.comp ? esc(c.comp) + (c.backup ? '<div class="help">backup (key competitor sold out)</div>' : "") : DASH}</td>
-        <td>${c.channel ? esc(c.channel) + (c.chNote ? `<div class="help">${esc(c.chNote)}</div>` : "") : DASH}</td>
+        <td class="w">${c.channel ? esc(c.channel) + (c.chNote ? `<div class="help">${esc(c.chNote)}</div>` : "") : DASH}</td>
         <td class="w">${c.theirRoom ? esc(c.theirRoom) + (c.cat ? `<div class="help">${esc(c.cat)}</div>` : "") : c.cat ? esc(c.cat) : DASH}</td>
         <td class="num">${c.theirPrice != null ? money(c.theirPrice) : DASH}</td>
         <td class="w">${c.event ? `<b>${esc(c.event)}</b>` : c.small ? `<span class="help">Not counted: ${esc(c.small)}</span>` : DASH}</td>
