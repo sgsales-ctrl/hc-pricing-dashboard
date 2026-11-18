@@ -93,7 +93,7 @@
       <h2 id="ckTitle">Today's checklist</h2>
       <p class="help" style="margin:0 0 6px">Check these three before you review prices. A tick means it is up to date.</p>
       <div class="step"><div class="st" id="ck1s">…</div><div><b>1. Cloudbeds rates and rooms left</b><div class="help" id="ck1t">…</div></div><button id="ck1b" class="act">Refresh Cloudbeds data</button></div>
-      <div class="step"><div class="st" id="ck2s">…</div><div><b>2. Competitor prices (Lighthouse)</b><div class="help" id="ck2t">…</div></div><button id="ck2b" class="act">Update competitor prices</button></div>
+      <div class="step"><div class="st" id="ck2s">…</div><div><b>2. Competitor prices (Lighthouse)</b><div class="help" id="ck2t">…</div><div class="help" style="margin-top:4px;color:var(--ink)"><b>How:</b> click <b>Update competitor prices</b>. In the Lighthouse tab that opens, click your <b>Load to HC Pricing</b> bookmark. Wait about 30 seconds until it says "done".</div></div><button id="ck2b" class="act">Update competitor prices</button></div>
       <div class="step"><div class="st" id="ck3s">…</div><div><b>3. Price suggestions</b><div class="help" id="ck3t">…</div></div><button id="ck3b" class="act">Make suggestions</button></div>
       <p id="ckMsg" class="help" style="min-height:18px"></p>
       <p style="text-align:right;margin:0"><button id="ckClose" class="primary">Start reviewing prices</button></p>
@@ -248,7 +248,7 @@
     const compOk = sgDay(ck.comp) === sgToday();
     set(2, compOk, !ck.comp ? "Not loaded yet: click Update competitor prices."
       : compOk ? `Updated today, ${fmtTime(ck.comp)}. Lighthouse updates about once a day, so once a day is enough.`
-      : `Last updated ${fmtTime(ck.comp)}, not today yet. Click Update competitor prices, then the Load to HC Pricing bookmark in Lighthouse.`);
+      : `Last updated ${fmtTime(ck.comp)}, not today yet.`);
     const latest = Math.max(ck.comp ? Date.parse(ck.comp) : 0, ck.manual ? Date.parse(ck.manual) : 0);
     const suggOk = !!ck.sugg && sgDay(ck.sugg) === sgToday() && Date.parse(ck.sugg) >= latest - 120e3;
     set(3, suggOk, !ck.sugg ? "Not made yet: click Make suggestions."
