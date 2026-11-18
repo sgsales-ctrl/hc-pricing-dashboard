@@ -12,7 +12,7 @@
   header { display:flex; align-items:center; gap:12px; padding:12px 20px; background:var(--card); border-bottom:1px solid var(--line); }
   header h1 { font-size:16px; margin:0; flex:1; }
   .muted { color:var(--muted); }
-  main, .box { max-width:1200px; margin:16px auto; padding:0 16px; }
+  main, .box { max-width:1600px; margin:16px auto; padding:0 16px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
   .narrow { max-width:420px; margin:48px auto; }
   label { display:block; font-weight:600; margin:10px 0 4px; }
@@ -40,6 +40,21 @@
   .err { color:var(--bad); }
   .actions button { padding:4px 8px; font-size:12px; }
   .help { font-size:12px; color:var(--muted); }
+  /* Main action buttons: easy to see. "due" = competitor prices not updated today. */
+  button.act { border:2px solid var(--accent); color:var(--accent); font-weight:600; padding:8px 14px; }
+  button.act.due { background:var(--warn); border-color:var(--warn); color:#fff; }
+  td.w { white-space:normal; min-width:100px; max-width:180px; }
+  td.how { white-space:normal; min-width:200px; max-width:300px; }
+  td.how summary { cursor:pointer; margin-top:4px; }
+  /* Today's checklist pop-up */
+  .modal { position:fixed; inset:0; background:rgba(16,24,40,.45); display:flex; align-items:flex-start; justify-content:center; z-index:50; padding:60px 16px; overflow:auto; }
+  .modal[hidden] { display:none; }
+  .modal-box { background:var(--card); border-radius:12px; max-width:640px; width:100%; padding:22px 24px; box-shadow:0 12px 40px rgba(0,0,0,.25); }
+  .modal-box h2 { margin:0 0 4px; font-size:20px; }
+  .step { display:flex; gap:14px; align-items:center; padding:14px 0; border-bottom:1px solid var(--line); }
+  .step > div:nth-child(2) { flex:1; }
+  .st { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; flex:none; background:#eef2f6; }
+  .st.good { background:#d1fadf; color:var(--good); } .st.due { background:#fef0c7; color:var(--warn); }
 </style>
 </head>
 <body>
@@ -69,13 +84,26 @@
 </section>
 
 <main id="app" hidden>
+  <!-- Today's checklist: shows every time the dashboard opens (Ann, 18 Nov) -->
+  <div id="checkModal" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-labelledby="ckTitle">
+      <h2 id="ckTitle">Today's checklist</h2>
+      <p class="help" style="margin:0 0 6px">Check these three before you review prices. A tick means it is up to date.</p>
+      <div class="step"><div class="st" id="ck1s">…</div><div><b>1. Cloudbeds rates and rooms left</b><div class="help" id="ck1t">…</div></div><button id="ck1b" class="act">Refresh Cloudbeds data</button></div>
+      <div class="step"><div class="st" id="ck2s">…</div><div><b>2. Competitor prices (Lighthouse)</b><div class="help" id="ck2t">…</div></div><button id="ck2b" class="act">Update competitor prices</button></div>
+      <div class="step"><div class="st" id="ck3s">…</div><div><b>3. Price suggestions</b><div class="help" id="ck3t">…</div></div><button id="ck3b" class="act">Make suggestions</button></div>
+      <p id="ckMsg" class="help" style="min-height:18px"></p>
+      <p style="text-align:right;margin:0"><button id="ckClose" class="primary">Start reviewing prices</button></p>
+    </div>
+  </div>
   <div class="card bar">
     <span>Sending to Cloudbeds: <span id="sending" class="pill">…</span></span>
     <span>Cloudbeds updated: <b id="lastPull">…</b> <span class="muted">(every 15 min)</span></span>
     <span>Competitor prices: <b id="lastComp">…</b></span>
-    <button id="refresh">Refresh Cloudbeds data</button>
-    <button id="makeSugg">Make suggestions</button>
-    <button id="updComp">Update competitor prices</button>
+    <button id="openCheck" class="primary">Today's checklist</button>
+    <button id="refresh" class="act">Refresh Cloudbeds data</button>
+    <button id="updComp" class="act">Update competitor prices</button>
+    <button id="makeSugg" class="act">Make suggestions</button>
     <span id="msg" class="muted"></span>
   </div>
   <div id="noComp" class="card help" hidden>No competitor prices yet: Lighthouse is not connected, so suggestions use your occupancy and events only, and keep today's price otherwise.</div>
@@ -135,7 +163,7 @@
   let sb, user, rooms = [], sendMode = "off";
 
   function show(id) { ["setup", "login", "app"].forEach((x) => ($(x).hidden = x !== id)); }
-  function say(t, isErr) { $("msg").textContent = t || ""; $("msg").className = isErr ? "err" : "muted"; }
+  function say(t, isErr) { for (const id of ["msg", "ckMsg"]) { $(id).textContent = t || ""; $(id).className = isErr ? "err" : "muted"; } }
 
   async function start() {
     const cfg = getCfg();
@@ -146,6 +174,7 @@
     user = data.session.user;
     $("who").textContent = user.email; $("logout").hidden = false;
     show("app");
+    $("checkModal").hidden = false;
     await Promise.all([loadStatus(), loadRooms()]);
     await loadSugg();
   }
@@ -195,7 +224,40 @@
     const cbAt = cp && cp[0] && cp[0].pulled_at;
     $("lastPull").textContent = cbAt ? fmtTime(cbAt) + (last && last.ok === false && last.started_at > cbAt ? " (last try failed)" : "") : "never";
     $("lastComp").textContent = lc && lc[0] && lc[0].loaded_at ? fmtTime(lc[0].loaded_at) : "never";
+    const [{ data: sg }, { data: mp }] = await Promise.all([
+      sb.from("run_log").select("finished_at").eq("job", "make-suggestions").eq("ok", true).not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(1),
+      sb.from("run_log").select("finished_at").eq("job", "cloudbeds-pull").eq("ok", true).not("run_by", "like", "Auto%").not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(1),
+    ]);
+    ck.cb = cbAt || null; ck.comp = (lc && lc[0] && lc[0].loaded_at) || null;
+    ck.sugg = (sg && sg[0] && sg[0].finished_at) || null; ck.manual = (mp && mp[0] && mp[0].finished_at) || null;
+    renderCheck();
   }
+
+  // ---------- Today's checklist ----------
+  const ck = { cb: null, comp: null, sugg: null, manual: null };
+  const sgDay = (t) => (t ? new Date(Date.parse(t) + 8 * 3600e3).toISOString().slice(0, 10) : "");
+  function renderCheck() {
+    const mins = (t) => (t ? (Date.now() - Date.parse(t)) / 60e3 : Infinity);
+    const set = (i, ok, text) => { $("ck" + i + "s").textContent = ok ? "✓" : "!"; $("ck" + i + "s").className = "st " + (ok ? "good" : "due"); $("ck" + i + "t").textContent = text; };
+    const cbOk = mins(ck.cb) <= 30;
+    set(1, cbOk, !ck.cb ? "Not read yet: click Refresh Cloudbeds data."
+      : `Updated ${fmtTime(ck.cb)}. It updates by itself every 15 minutes and after each booking.` + (cbOk ? " Click Refresh only if you need it this minute." : " That is over 30 minutes ago: click Refresh Cloudbeds data."));
+    const compOk = sgDay(ck.comp) === sgToday();
+    set(2, compOk, !ck.comp ? "Not loaded yet: click Update competitor prices."
+      : compOk ? `Updated today, ${fmtTime(ck.comp)}. Lighthouse updates about once a day, so once a day is enough.`
+      : `Last updated ${fmtTime(ck.comp)}, not today yet. Click Update competitor prices, then the Load to HC Pricing bookmark in Lighthouse.`);
+    const latest = Math.max(ck.comp ? Date.parse(ck.comp) : 0, ck.manual ? Date.parse(ck.manual) : 0);
+    const suggOk = !!ck.sugg && sgDay(ck.sugg) === sgToday() && Date.parse(ck.sugg) >= latest - 120e3;
+    set(3, suggOk, !ck.sugg ? "Not made yet: click Make suggestions."
+      : `Made ${fmtTime(ck.sugg)}. They are remade by themselves after each Cloudbeds change and after competitor prices load.` + (suggOk ? "" : " They are older than your latest data: click Make suggestions."));
+    $("updComp").classList.toggle("due", !compOk); $("ck2b").classList.toggle("due", !compOk);
+  }
+  $("openCheck").onclick = () => { $("checkModal").hidden = false; loadStatus(); };
+  $("ckClose").onclick = () => { $("checkModal").hidden = true; };
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("checkModal").hidden = true; });
+  $("ck1b").onclick = () => $("refresh").click();
+  $("ck2b").onclick = () => $("updComp").click();
+  $("ck3b").onclick = () => $("makeSugg").click();
 
   async function loadRooms() {
     const { data } = await sb.from("room_types").select("*").order("property_code").order("ia_rate");
@@ -207,7 +269,7 @@
     if (busy) return;
     busy = true;
     say(label + "…");
-    $("refresh").disabled = $("makeSugg").disabled = $("sendAll").disabled = true;
+    $("refresh").disabled = $("makeSugg").disabled = $("sendAll").disabled = $("ck1b").disabled = $("ck3b").disabled = true;
     try {
       const { data, error } = await sb.functions.invoke("cloudbeds-pull", { method: "POST", body: Object.assign({ action }, extra || {}) });
       if (error) {
@@ -220,7 +282,7 @@
       say(label + " failed: " + e.message, true);
     } finally {
       busy = false;
-      $("refresh").disabled = $("makeSugg").disabled = $("sendAll").disabled = false;
+      $("refresh").disabled = $("makeSugg").disabled = $("sendAll").disabled = $("ck1b").disabled = $("ck3b").disabled = false;
       await loadStatus(); await loadRooms(); await loadSugg();
     }
   }
@@ -286,18 +348,46 @@
     const ups = shown.filter((s) => s.suggested_rate > s.current_rate).length, downs = shown.filter((s) => s.suggested_rate < s.current_rate).length;
     const later = all.length - shown.length;
     $("suggCount").textContent = `Showing ${shown.length}: ${ups} up, ${downs} down, ${shown.filter((s) => s.flags).length} flagged.` + (later ? ` ${later} more further ahead (choose "All 90 days" to see them).` : "");
-    const head = '<tr><th>Night</th><th>Property</th><th>Room</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th>Why</th><th>Decision</th></tr>';
-    if (!shown.length) { $("suggTable").innerHTML = head + '<tr><td colspan="8" class="muted">No suggestions here for today yet.</td></tr>'; return; }
+    const head = '<tr><th>Night</th><th>Property</th><th>Room</th><th class="num">Hotel booked</th><th>Room type</th><th>Competitor</th><th>Channel</th><th>Their room</th><th class="num">Their price</th><th>Event</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th>How it was set</th><th>Decision</th></tr>';
+    if (!shown.length) { $("suggTable").innerHTML = head + '<tr><td colspan="15" class="muted">No suggestions here for today yet.</td></tr>'; return; }
     $("suggTable").innerHTML = head + shown.map((s) => {
       const diff = (s.suggested_rate ?? 0) - (s.current_rate ?? 0);
       const dec = s.status === "pending"
         ? `<span class="actions"><button data-a="approve" data-id="${s.id}">Approve</button> <button data-a="change" data-id="${s.id}">Change</button> <button data-a="reject" data-id="${s.id}">Reject</button></span>`
         : decisionCell(s);
+      const c = cols(s);
+      const flag = s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : "";
+      const how = s.details ? `<div>${esc(c.note)}</div><details><summary class="help">Full explanation</summary><div class="help">${esc(s.reason)}</div></details>` : esc(s.reason);
       return `<tr><td>${fmtDate(s.stay_date)}</td><td>${esc(s.property_code)}</td><td>${esc(s.room_name)}</td>
+        <td class="num">${c.occ || DASH}</td>
+        <td>${c.rtBooked ? c.rtBooked + `<div class="help">${c.left}</div>` : c.left || DASH}</td>
+        <td class="w">${c.comp ? esc(c.comp) + (c.backup ? '<div class="help">backup (key competitor sold out)</div>' : "") : DASH}</td>
+        <td>${c.channel ? esc(c.channel) + (c.chNote ? `<div class="help">${esc(c.chNote)}</div>` : "") : DASH}</td>
+        <td class="w">${c.theirRoom ? esc(c.theirRoom) + (c.cat ? `<div class="help">${esc(c.cat)}</div>` : "") : c.cat ? esc(c.cat) : DASH}</td>
+        <td class="num">${c.theirPrice != null ? money(c.theirPrice) : DASH}</td>
+        <td class="w">${c.event ? `<b>${esc(c.event)}</b>` : c.small ? `<span class="help">Not counted: ${esc(c.small)}</span>` : DASH}</td>
         <td class="num">${money(s.current_rate)}</td><td class="num"><b>${money(s.suggested_rate)}</b></td>
         <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${diff ? money(diff).replace("S$-", "-S$") : "0"}</td>
-        <td class="wrap">${esc(s.reason)}${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}</td><td>${dec}</td></tr>`;
+        <td class="how">${how}${flag}</td><td>${dec}</td></tr>`;
     }).join("");
+  }
+  // The Why split into columns (Ann, 18 Nov). Suggestions made before 18 Nov have no details: those show the full Why only.
+  const DASH = '<span class="muted">—</span>';
+  function cols(s) {
+    const d = s.details || {}, c = d.comp || null;
+    const pct = (x) => Math.round(x * 100) + "%";
+    return {
+      occ: d.occ != null ? pct(d.occ) : "",
+      rtBooked: d.left != null && d.units ? pct(1 - d.left / d.units) + " booked" : "",
+      left: d.left != null ? (d.units ? `${d.left} of ${d.units} left` : `${d.left} left`) : "",
+      comp: c ? c.name : "", backup: !!(c && c.backup),
+      channel: c && c.channel ? c.channel : "",
+      chNote: c ? [c.channels && c.channels.length > 1 ? `lowest of ${c.channels.length} channels` : "", c.taxAdded ? "taxes added" : ""].filter(Boolean).join(", ") : "",
+      theirRoom: c && c.room ? c.room : "", cat: c && c.cat ? c.cat : "",
+      theirPrice: c ? Number(c.price) : null,
+      event: d.event || "", small: d.small || d.smallEvent || "",
+      note: d.note || "",
+    };
   }
   function decisionCell(s) {
     const label = s.status === "failed" ? '<b class="err">not sent</b>' : `<b>${esc(s.status)}</b>`;
@@ -379,7 +469,7 @@
       diff: Number(s.suggested_rate ?? 0) - Number(s.current_rate ?? 0),
       status: s.status === "failed" ? "not sent" : s.status,
       final: s.final_rate != null && s.status !== "rejected" ? Number(s.final_rate) : null,
-      why: s.reason || "", flags: s.flags || "", by: s.decided_by_email || "", at: s.decided_at ? fmtTime(s.decided_at) : "",
+      why: s.reason || "", flags: s.flags || "", by: s.decided_by_email || "", at: s.decided_at ? fmtTime(s.decided_at) : "", c: cols(s),
       send: s.send_message ? s.send_message + (s.sent_at ? " " + fmtTime(s.sent_at) : "") : "",
     }));
   }
@@ -472,13 +562,16 @@
   function exportXlsx() {
     if (!shown.length) return say("Nothing to export: no suggestions are shown.", true);
     const info = exportInfo();
-    const rows = exportRows().map((r) => [r.night, r.prop, r.room, r.now, r.sug, r.diff, r.status, r.final, r.why, r.flags, r.by, r.at, r.send]);
+    const rows = exportRows().map((r) => [r.night, r.prop, r.room, r.c.occ, r.c.rtBooked, r.c.left, r.c.comp + (r.c.backup ? " (backup)" : ""), [r.c.channel, r.c.chNote].filter(Boolean).join(", "),
+      [r.c.theirRoom, r.c.cat ? "(" + r.c.cat + ")" : ""].filter(Boolean).join(" "), r.c.theirPrice, r.c.event || (r.c.small ? "Not counted: " + r.c.small : ""),
+      r.now, r.sug, r.diff, r.c.note, r.status, r.final, r.why, r.flags, r.by, r.at, r.send]);
     download(makeXlsx({
       sheet: "Suggestions", title: "Heritage Collection Pricing Dashboard: price suggestions",
       sub: `Made ${info.made}${info.by ? " by " + info.by : ""} | ${info.filters} | ${rows.length} rows`,
-      head: ["Night", "Property", "Room", "Now (S$)", "Suggested (S$)", "Change (S$)", "Status", "Final price (S$)", "Why", "Flags", "Decided by", "Decided at", "Cloudbeds"],
-      types: ["date", "text", "text", "money", "money", "change", "text", "money", "wrap", "wrap", "text", "text", "wrap"],
-      widths: [16, 9, 30, 10, 14, 12, 10, 15, 90, 45, 28, 16, 45], rows,
+      head: ["Night", "Property", "Room", "Hotel booked", "Room type booked", "Rooms of this type left", "Competitor", "Channel", "Their room", "Their price (S$)", "Event",
+        "Now (S$)", "Suggested (S$)", "Change (S$)", "How it was set", "Status", "Final price (S$)", "Why (full explanation)", "Flags", "Decided by", "Decided at", "Cloudbeds"],
+      types: ["date", "text", "text", "text", "text", "text", "wrap", "wrap", "wrap", "money", "wrap", "money", "money", "change", "wrap", "text", "money", "wrap", "wrap", "text", "text", "wrap"],
+      widths: [16, 9, 30, 11, 14, 14, 22, 20, 28, 12, 30, 10, 14, 12, 40, 10, 15, 90, 45, 28, 16, 45], rows,
     }), info.base + ".xlsx");
     say(`Excel file downloaded: ${rows.length} rows.`);
   }
@@ -509,22 +602,25 @@
     doc.text(pdfText(`Made ${info.made}${info.by ? " by " + info.by : ""}  |  ${info.filters}  |  ${shown.length} rows`), 30, 48);
     doc.setTextColor(0);
     const body = exportRows().map((r) => [
-      fmtDate(r.night), r.prop, r.room, money(r.now), money(r.sug), signed(r.diff),
-      r.status + (r.final != null ? " " + money(r.final) : ""),
-      r.why + (r.flags ? "\nFLAG: " + r.flags : ""),
-      [r.by, r.at, r.send].filter(Boolean).join("\n"),
+      fmtDate(r.night), r.prop, r.room,
+      [r.c.occ ? "Hotel " + r.c.occ : "", r.c.rtBooked ? "Room type " + r.c.rtBooked : "", r.c.left].filter(Boolean).join("\n"),
+      [r.c.comp + (r.c.backup ? " (backup)" : ""), [r.c.channel, r.c.chNote].filter(Boolean).join(", "), [r.c.theirRoom, r.c.cat ? "(" + r.c.cat + ")" : ""].filter(Boolean).join(" "), r.c.theirPrice != null ? money(r.c.theirPrice) : ""].filter(Boolean).join("\n"),
+      r.c.event || (r.c.small ? "Not counted: " + r.c.small : ""),
+      money(r.now), money(r.sug), signed(r.diff),
+      [r.status + (r.final != null ? " " + money(r.final) : ""), r.by, r.at, r.send].filter(Boolean).join("\n"),
+      (r.c.note ? r.c.note + "\n\n" : "") + r.why + (r.flags ? "\nFLAG: " + r.flags : ""),
     ].map(pdfText));
     const opts = {
       startY: 58, margin: { left: 30, right: 30, top: 30, bottom: 30 }, theme: "grid",
-      head: [["Night", "Prop.", "Room", "Now", "Suggested", "Change", "Decision", "Why", "Decided by / Cloudbeds"]], body,
+      head: [["Night", "Prop.", "Room", "Booked", "Competitor we follow", "Event", "Now", "Suggested", "Change", "Decision", "How it was set / Why"]], body,
       styles: { font: "helvetica", fontSize: 7, cellPadding: 3, overflow: "linebreak", valign: "top", lineColor: [228, 231, 236], lineWidth: 0.4 },
       headStyles: { fillColor: [31, 111, 92], textColor: 255, fontStyle: "bold" },
-      columnStyles: { 0: { cellWidth: 52 }, 1: { cellWidth: 30 }, 2: { cellWidth: 82 }, 3: { cellWidth: 38, halign: "right" }, 4: { cellWidth: 46, halign: "right", fontStyle: "bold" },
-        5: { cellWidth: 40, halign: "right" }, 6: { cellWidth: 56 }, 7: { cellWidth: "auto" }, 8: { cellWidth: 100 } },
+      columnStyles: { 0: { cellWidth: 46 }, 1: { cellWidth: 26 }, 2: { cellWidth: 72 }, 3: { cellWidth: 58 }, 4: { cellWidth: 104 }, 5: { cellWidth: 70 },
+        6: { cellWidth: 34, halign: "right" }, 7: { cellWidth: 42, halign: "right", fontStyle: "bold" }, 8: { cellWidth: 36, halign: "right" }, 9: { cellWidth: 70 }, 10: { cellWidth: "auto" } },
       didParseCell: (d) => {
         if (d.section !== "body") return;
-        if (d.column.index === 5) d.cell.styles.textColor = /^\+/.test(d.cell.raw) ? [6, 118, 71] : /^-/.test(d.cell.raw) ? [180, 35, 24] : [0, 0, 0];
-        if (d.column.index === 7 && /\nFLAG: /.test(d.cell.raw)) d.cell.styles.textColor = [120, 53, 4];
+        if (d.column.index === 8) d.cell.styles.textColor = /^\+/.test(d.cell.raw) ? [6, 118, 71] : /^-/.test(d.cell.raw) ? [180, 35, 24] : [0, 0, 0];
+        if (d.column.index === 10 && /\nFLAG: /.test(d.cell.raw)) d.cell.styles.textColor = [120, 53, 4];
       },
       didDrawPage: () => {
         doc.setFontSize(7); doc.setTextColor(130);
