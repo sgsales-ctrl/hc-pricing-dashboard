@@ -46,6 +46,9 @@
   td.w { white-space:normal; min-width:100px; max-width:180px; }
   td.how { white-space:normal; min-width:200px; max-width:300px; }
   td.how summary { cursor:pointer; margin-top:4px; }
+  /* The Decision column stays in view on the right while the table scrolls sideways. */
+  #suggTable tr > :last-child { position:sticky; right:0; background:var(--card); box-shadow:-8px 0 8px -8px rgba(16,24,40,.25); }
+  #suggTable th:last-child { background:#fafbfc; z-index:2; }
   /* Today's checklist pop-up */
   .modal { position:fixed; inset:0; background:rgba(16,24,40,.45); display:flex; align-items:flex-start; justify-content:center; z-index:50; padding:60px 16px; overflow:auto; }
   .modal[hidden] { display:none; }
@@ -358,7 +361,7 @@
       const c = cols(s);
       const flag = s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : "";
       const how = s.details ? `<div>${esc(c.note)}</div><details><summary class="help">Full explanation</summary><div class="help">${esc(s.reason)}</div></details>` : esc(s.reason);
-      return `<tr><td>${fmtDate(s.stay_date)}</td><td>${esc(s.property_code)}</td><td>${esc(s.room_name)}</td>
+      return `<tr><td>${fmtDate(s.stay_date)}</td><td>${esc(s.property_code)}</td><td class="w">${esc(s.room_name)}</td>
         <td class="num">${c.occ || DASH}</td>
         <td>${c.rtBooked ? c.rtBooked + `<div class="help">${c.left}</div>` : c.left || DASH}</td>
         <td class="w">${c.comp ? esc(c.comp) + (c.backup ? '<div class="help">backup (key competitor sold out)</div>' : "") : DASH}</td>
