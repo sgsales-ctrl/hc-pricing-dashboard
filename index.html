@@ -58,6 +58,16 @@
   .step > div:nth-child(2) { flex:1; }
   .st { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; flex:none; background:#eef2f6; }
   .st.good { background:#d1fadf; color:var(--good); } .st.due { background:#fef0c7; color:var(--warn); }
+  /* Red reconfirm pop-up for price drops of S$20 or more */
+  .modal-box.drop { border:3px solid var(--bad); }
+  .modal-box.drop h2 { color:var(--bad); }
+  .dropline { background:#fef3f2; color:var(--bad); padding:8px 12px; border-radius:8px; font-weight:600; margin:8px 0; }
+  button.danger { background:var(--bad); border-color:var(--bad); color:#fff; font-weight:600; }
+  .pill.bigdrop { background:#fee4e2; color:var(--bad); }
+  td.record { white-space:normal; min-width:420px; max-width:640px; }
+  .rec-facts { font-size:12px; margin:4px 0; }
+  .rec-why { font-size:12px; color:var(--muted); }
+  .reconf { color:var(--bad); font-size:12px; font-weight:600; margin-top:4px; }
 </style>
 </head>
 <body>
@@ -97,6 +107,14 @@
       <div class="step"><div class="st" id="ck3s">…</div><div><b>3. Price suggestions</b><div class="help" id="ck3t">…</div></div><button id="ck3b" class="act">Make suggestions</button></div>
       <p id="ckMsg" class="help" style="min-height:18px"></p>
       <p style="text-align:right;margin:0"><button id="ckClose" class="primary">Start reviewing prices</button></p>
+    </div>
+  </div>
+  <!-- Red reconfirm pop-up: a price drop of S$20 or more (Ann, 18 Nov) -->
+  <div id="dropModal" class="modal" hidden>
+    <div class="modal-box drop" role="alertdialog" aria-labelledby="dropTitle">
+      <h2 id="dropTitle">Big price drop: please reconfirm</h2>
+      <div id="dropBody"></div>
+      <p style="text-align:right;margin:16px 0 0"><button id="dropNo">Cancel</button> <button id="dropAlt" hidden></button> <button id="dropYes" class="danger">Yes, approve</button></p>
     </div>
   </div>
   <div class="card bar">
@@ -140,6 +158,17 @@
   </section>
 
   <section id="tab-log" hidden>
+    <div class="card bar">
+      <label style="margin:0">Show <select id="logKind"><option value="price" selected>Price changes (approved, changed, rejected, sent)</option><option value="app">App updates (Cloudbeds, Lighthouse, suggestions)</option></select></label>
+      <span id="priceFilters" class="bar">
+        <label style="margin:0">Decided <select id="logDays"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select></label>
+        <label style="margin:0">Property <select id="logProp"><option value="">All</option><option>BQQ</option><option>KG</option><option>CN</option></select></label>
+        <label style="margin:0">Decision <select id="logStatus"><option value="">All</option><option value="approved,changed,sent,failed">Approved or changed</option><option value="sent">Sent to Cloudbeds</option><option value="approved,changed">Approved, not sent yet</option><option value="failed">Could not send</option><option value="rejected">Rejected</option></select></label>
+        <label style="margin:0;font-weight:normal"><input type="checkbox" id="logBig"> Big drops only (S$20+ lower)</label>
+        <button id="logExport">Export the record (Excel)</button>
+      </span>
+    </div>
+    <div class="help" id="logCount" style="margin:0 0 8px 4px"></div>
     <div class="card scroll" style="padding:0"><table id="logTable"></table></div>
   </section>
 </main>
@@ -257,7 +286,7 @@
   }
   $("openCheck").onclick = () => { $("checkModal").hidden = false; loadStatus(); };
   $("ckClose").onclick = () => { $("checkModal").hidden = true; };
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("checkModal").hidden = true; });
+  document.addEventListener("keydown", (e) => { if (e.key !== "Escape") return; if (!$("dropModal").hidden) return $("dropNo").click(); $("checkModal").hidden = true; });
   $("ck1b").onclick = () => $("refresh").click();
   $("ck2b").onclick = () => $("updComp").click();
   $("ck3b").onclick = () => $("makeSugg").click();
@@ -370,7 +399,7 @@
         <td class="num">${c.theirPrice != null ? money(c.theirPrice) : DASH}</td>
         <td class="w">${c.event ? `<b>${esc(c.event)}</b>` : c.small ? `<span class="help">Not counted: ${esc(c.small)}</span>` : DASH}</td>
         <td class="num">${money(s.current_rate)}</td><td class="num"><b>${money(s.suggested_rate)}</b></td>
-        <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${diff ? money(diff).replace("S$-", "-S$") : "0"}</td>
+        <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${diff ? money(diff).replace("S$-", "-S$") : "0"}${-diff >= BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
         <td class="how">${how}${flag}</td><td>${dec}</td></tr>`;
     }).join("");
   }
@@ -406,17 +435,44 @@
     const r = rooms.find((x) => x.cloudbeds_room_type_id === s.cloudbeds_room_type_id);
     return r ? { min: Number(r.minimum), max: Number(r.maximum) } : null;
   }
-  async function decide(s, status, finalRate) {
-    const { error } = await sb.from("suggestions").update({
-      status, final_rate: finalRate, decided_by: user.id, decided_by_email: user.email, decided_at: new Date().toISOString(),
-    }).eq("id", s.id).eq("status", "pending");
+  async function decide(s, status, finalRate, note) {
+    const row = { status, final_rate: finalRate, decided_by: user.id, decided_by_email: user.email, decided_at: new Date().toISOString() };
+    if (note) row.decision_note = note; // e.g. a price drop of S$20 or more, reconfirmed in the red pop-up
+    const { error } = await sb.from("suggestions").update(row).eq("id", s.id).eq("status", "pending");
     if (error) throw error;
+  }
+
+  // ---------- Price drops of S$20 or more: a second, red confirmation (Ann, 18 Nov) ----------
+  const BIG_DROP = 20;
+  const dropOf = (s, price) => Number(s.current_rate ?? 0) - Number(price ?? 0);
+  const dropNote = (s, price) => `Price drop of S$${Math.round(dropOf(s, price))} reconfirmed (red pop-up)`;
+  const dropLine = (s, price) => `<div class="dropline">${esc(s.room_name)}, ${fmtDate(s.stay_date)} (${esc(s.property_code)}): ${money(s.current_rate)} → ${money(price)} (-S$${Math.round(dropOf(s, price))})</div>`;
+  // Resolves "yes", "alt" or "no".
+  function confirmDrop(title, html, yesText, altText) {
+    return new Promise((done) => {
+      $("dropTitle").textContent = title; $("dropBody").innerHTML = html; $("dropYes").textContent = yesText;
+      $("dropAlt").hidden = !altText; $("dropAlt").textContent = altText || "";
+      $("dropModal").hidden = false; $("dropNo").focus();
+      const close = (v) => { $("dropModal").hidden = true; $("dropYes").onclick = $("dropNo").onclick = $("dropAlt").onclick = null; done(v); };
+      $("dropYes").onclick = () => close("yes"); $("dropNo").onclick = () => close("no"); $("dropAlt").onclick = () => close("alt");
+    });
+  }
+  async function okBigDrop(s, price) {
+    if (dropOf(s, price) < BIG_DROP) return true;
+    const why = s.details ? `<p class="help" style="margin:6px 0 0"><b>How it was set:</b> ${esc(s.details.note || "")}</p>` : "";
+    return (await confirmDrop("Big price drop: please reconfirm",
+      `<p style="margin:4px 0">This lowers the price by S$${BIG_DROP} or more. Please check the reason before you approve.</p>` + dropLine(s, price) + why +
+      `<details style="margin-top:6px"><summary class="help">Full explanation</summary><p class="help">${esc(s.reason || "")}</p></details>`,
+      "Yes, approve this lower price")) === "yes";
   }
   $("suggTable").onclick = async (e) => {
     const b = e.target.closest("button"); if (!b) return;
     const s = shown.find((x) => String(x.id) === b.dataset.id); if (!s) return;
     try {
-      if (b.dataset.a === "approve") await decide(s, "approved", s.suggested_rate);
+      if (b.dataset.a === "approve") {
+        if (!(await okBigDrop(s, s.suggested_rate))) return;
+        await decide(s, "approved", s.suggested_rate, dropOf(s, s.suggested_rate) >= BIG_DROP ? dropNote(s, s.suggested_rate) : null);
+      }
       if (b.dataset.a === "reject") await decide(s, "rejected", null);
       if (b.dataset.a === "send") {
         const price = money(s.final_rate ?? s.suggested_rate);
@@ -429,7 +485,8 @@
         if (v == null) return;
         const n = Math.round(Number(v));
         if (!n || (lim && (n < lim.min || n > lim.max))) return alert("That price is outside this room's Minimum and Maximum.");
-        await decide(s, "changed", n);
+        if (!(await okBigDrop(s, n))) return;
+        await decide(s, "changed", n, dropOf(s, n) >= BIG_DROP ? dropNote(s, n) : null);
       }
       await loadSugg();
     } catch (err) { say("Could not save: " + err.message, true); }
@@ -438,8 +495,19 @@
     const todo = shown.filter((s) => s.status === "pending");
     if (!todo.length) return;
     if (!confirm(`Approve all ${todo.length} suggestions shown?`)) return;
+    let list = todo;
+    const big = todo.filter((s) => dropOf(s, s.suggested_rate) >= BIG_DROP);
+    if (big.length) {
+      const ans = await confirmDrop(`${big.length} big price drop${big.length > 1 ? "s" : ""}: please reconfirm`,
+        `<p style="margin:4px 0">${big.length} of the ${todo.length} prices go down by S$${BIG_DROP} or more:</p>` + big.slice(0, 8).map((s) => dropLine(s, s.suggested_rate)).join("") +
+        (big.length > 8 ? `<p class="help">…and ${big.length - 8} more. Use "Big drop" in the Change column to find them.</p>` : "") +
+        `<p class="help">You can approve all of them, or approve only the others and check the big drops one by one.</p>`,
+        `Yes, approve all ${todo.length}`, `Approve the other ${todo.length - big.length} only`);
+      if (ans === "no") return;
+      if (ans === "alt") list = todo.filter((s) => dropOf(s, s.suggested_rate) < BIG_DROP);
+    }
     try {
-      for (let i = 0; i < todo.length; i += 10) await Promise.all(todo.slice(i, i + 10).map((s) => decide(s, "approved", s.suggested_rate)));
+      for (let i = 0; i < list.length; i += 10) await Promise.all(list.slice(i, i + 10).map((s) => decide(s, "approved", s.suggested_rate, dropOf(s, s.suggested_rate) >= BIG_DROP ? dropNote(s, s.suggested_rate) : null)));
     } catch (err) { say("Could not save: " + err.message, true); }
     await loadSugg();
   };
@@ -693,11 +761,80 @@
                     : '<tr><td colspan="4" class="muted">No data yet. Click "Refresh Cloudbeds data".</td></tr>');
   }
 
+  // ---------- Log: price changes (a record of each decision with its explanation), or app updates ----------
+  let logRows = [];
   async function loadLog() {
-    const { data } = await sb.from("run_log").select("*").order("started_at", { ascending: false }).limit(30);
-    $("logTable").innerHTML = '<tr><th>Started</th><th>Job</th><th>By</th><th>Result</th><th>Details</th></tr>' +
-      (data || []).map((l) => `<tr><td>${fmtTime(l.started_at)}</td><td>${esc(l.job)}</td><td>${l.run_by ? esc(l.run_by) : '<span class="muted">not recorded</span>'}</td><td>${l.ok ? '<span class="ok">OK</span>' : l.ok === false ? '<span class="no">Failed</span>' : "Running"}</td><td class="wrap">${esc(l.message)}</td></tr>`).join("");
+    const price = $("logKind").value === "price";
+    $("priceFilters").hidden = !price;
+    if (!price) {
+      const { data } = await sb.from("run_log").select("*").order("started_at", { ascending: false }).limit(100);
+      $("logCount").textContent = "The last 100 app updates (Cloudbeds, Lighthouse, suggestions, sending).";
+      $("logTable").innerHTML = '<tr><th>Started</th><th>Job</th><th>By</th><th>Result</th><th>Details</th></tr>' +
+        (data || []).map((l) => `<tr><td>${fmtTime(l.started_at)}</td><td>${esc(l.job)}</td><td>${l.run_by ? esc(l.run_by) : '<span class="muted">not recorded</span>'}</td><td>${l.ok ? '<span class="ok">OK</span>' : l.ok === false ? '<span class="no">Failed</span>' : "Running"}</td><td class="wrap">${esc(l.message)}</td></tr>`).join("");
+      return;
+    }
+    $("logCount").textContent = "Loading…";
+    const since = new Date(Date.parse(sgToday() + "T00:00:00+08:00") - (Number($("logDays").value) - 1) * 86400e3).toISOString();
+    const st = $("logStatus").value, prop = $("logProp").value;
+    let all = [];
+    for (let from = 0; from < 20000; from += 1000) {
+      let q = sb.from("suggestions").select("id,run_date,property_code,room_name,stay_date,current_rate,suggested_rate,final_rate,status,reason,flags,details,decided_by_email,decided_at,sent_at,send_message,decision_note")
+        .not("decided_at", "is", null).gte("decided_at", since).order("decided_at", { ascending: false }).order("id").range(from, from + 999);
+      if (st) q = q.in("status", st.split(","));
+      if (prop) q = q.eq("property_code", prop);
+      const { data, error } = await q;
+      if (error) { $("logCount").textContent = "Could not load the log: " + error.message; return; }
+      all = all.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    if ($("logBig").checked) all = all.filter((s) => s.status !== "rejected" && dropOf(s, s.final_rate ?? s.suggested_rate) >= BIG_DROP);
+    logRows = all;
+    const n = (f) => all.filter(f).length;
+    $("logCount").textContent = `${all.length} price decisions: ${n((s) => s.status === "sent")} sent to Cloudbeds, ${n((s) => s.status === "approved" || s.status === "changed")} approved but not sent yet, ${n((s) => s.status === "failed")} could not send, ${n((s) => s.status === "rejected")} rejected. Each row keeps the explanation the price was approved on.`;
+    const head = '<tr><th>Decided</th><th>By</th><th>Night</th><th>Property</th><th>Room</th><th class="num">Was</th><th class="num">New price</th><th class="num">Change</th><th>Decision</th><th>Cloudbeds</th><th>Explanation (record)</th></tr>';
+    if (!all.length) { $("logTable").innerHTML = head + '<tr><td colspan="11" class="muted">No price decisions for these filters.</td></tr>'; return; }
+    $("logTable").innerHTML = head + all.map((s) => {
+      const r = recOf(s);
+      return `<tr><td>${esc(r.when)}</td><td>${esc(r.by)}</td><td>${fmtDate(s.stay_date)}</td><td>${esc(s.property_code)}</td><td class="w">${esc(s.room_name)}</td>
+        <td class="num">${money(s.current_rate)}</td><td class="num"><b>${r.price != null ? money(r.price) : DASH}</b></td>
+        <td class="num ${r.diff > 0 ? "up" : r.diff < 0 ? "down" : ""}">${r.price != null ? signed(r.diff) : DASH}${r.diff <= -BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
+        <td>${esc(r.decision)}</td><td class="w">${esc(r.cb)}</td>
+        <td class="record">${r.note ? `<b>${esc(r.note)}</b>` : ""}${r.facts ? `<div class="rec-facts">${esc(r.facts)}</div>` : ""}<div class="rec-why">${esc(s.reason || "")}</div>${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}${s.decision_note ? `<div class="reconf">${esc(s.decision_note)}</div>` : ""}</td></tr>`;
+    }).join("");
   }
+  // One price decision as a record: who, when, what changed, and the facts behind it.
+  function recOf(s) {
+    const price = s.status === "rejected" ? null : Number(s.final_rate ?? s.suggested_rate);
+    const c = cols(s);
+    const changed = s.status === "changed" || (price != null && s.final_rate != null && Number(s.final_rate) !== Number(s.suggested_rate));
+    const decision = s.status === "rejected" ? `Rejected (suggested ${money(s.suggested_rate)})` : changed ? `Changed (suggested ${money(s.suggested_rate)})` : "Approved";
+    const cb = s.status === "sent" ? "Sent " + fmtTime(s.sent_at) : s.status === "failed" ? "Could not send: " + (s.send_message || "") : s.status === "rejected" ? "Not sent (rejected)" : "Not sent yet";
+    const facts = [c.occ ? `Hotel ${c.occ} booked` : "", c.rtBooked ? `Room type ${c.rtBooked} (${c.left})` : "",
+      c.comp ? `Competitor: ${c.comp}${c.backup ? " (backup)" : ""}${c.channel ? ", " + c.channel : ""}${c.chNote ? " (" + c.chNote + ")" : ""}${c.theirRoom ? ", " + c.theirRoom : ""}${c.cat ? " (" + c.cat + ")" : ""}${c.theirPrice != null ? " " + money(c.theirPrice) : ""}` : "",
+      c.event ? `Event: ${c.event}` : c.small ? `Event not counted: ${c.small}` : ""].filter(Boolean).join(" · ");
+    return { when: fmtTime(s.decided_at), by: s.decided_by_email || "", price, diff: price == null ? 0 : price - Number(s.current_rate ?? 0), decision, cb, note: c.note, facts };
+  }
+  $("logKind").onchange = loadLog; $("logDays").onchange = loadLog; $("logProp").onchange = loadLog; $("logStatus").onchange = loadLog; $("logBig").onchange = loadLog;
+  $("logExport").onclick = () => {
+    if (!logRows.length) return ($("logCount").textContent = "Nothing to export: no price decisions shown.");
+    const made = new Date().toLocaleString("en-SG", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const filters = `Decided: ${selText("logDays")} | Property: ${selText("logProp")} | Decision: ${selText("logStatus")}${$("logBig").checked ? " | Big drops only" : ""}`;
+    const rows = logRows.map((s) => {
+      const r = recOf(s), c = cols(s);
+      return [r.when, r.by, s.stay_date, s.property_code, s.room_name, s.current_rate == null ? null : Number(s.current_rate), r.price, r.price == null ? null : r.diff, r.decision, s.decision_note || "", r.cb,
+        r.note, c.occ, c.rtBooked ? c.rtBooked + " (" + c.left + ")" : c.left, c.comp + (c.backup ? " (backup)" : ""), [c.channel, c.chNote].filter(Boolean).join(", "),
+        [c.theirRoom, c.cat ? "(" + c.cat + ")" : ""].filter(Boolean).join(" "), c.theirPrice, c.event || (c.small ? "Not counted: " + c.small : ""), s.reason || "", s.flags || ""];
+    });
+    download(makeXlsx({
+      sheet: "Price changes", title: "Heritage Collection Pricing Dashboard: price change record",
+      sub: `Made ${made}${user && user.email ? " by " + user.email : ""} | ${filters} | ${rows.length} decisions`,
+      head: ["Decided", "By", "Night", "Property", "Room", "Was (S$)", "New price (S$)", "Change (S$)", "Decision", "Reconfirmed", "Cloudbeds", "How it was set", "Hotel booked",
+        "Room type", "Competitor", "Channel", "Their room", "Their price (S$)", "Event", "Why (full explanation)", "Flags"],
+      types: ["text", "text", "date", "text", "text", "money", "money", "change", "text", "wrap", "wrap", "wrap", "text", "text", "wrap", "wrap", "wrap", "money", "wrap", "wrap", "wrap"],
+      widths: [18, 28, 14, 9, 28, 10, 13, 12, 24, 30, 26, 40, 11, 24, 22, 20, 26, 12, 30, 90, 45], rows,
+    }), `HC price change record ${sgToday()}.xlsx`);
+    $("logCount").textContent = `Excel file downloaded: ${rows.length} price decisions.`;
+  };
 
   start();
 })();
