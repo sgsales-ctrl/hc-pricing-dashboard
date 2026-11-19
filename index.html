@@ -55,13 +55,20 @@
   #suggTable tr.sub th { position:static; }
   td.room { font-weight:600; white-space:normal; min-width:150px; max-width:220px; }
   td.calcw { white-space:normal; min-width:380px; }
+  /* The explanation (Ann, 19 Nov): numbered steps, ticks for checks that passed, one green line with the new price */
   table.calc { border-collapse:collapse; width:100%; font-size:13px; background:transparent; }
-  table.calc td { padding:3px 8px; border-bottom:1px dashed #eaecf0; white-space:normal; }
+  table.calc td { padding:5px 8px; border-bottom:1px solid #f0f1f3; white-space:normal; vertical-align:top; }
+  table.calc td.n { width:16px; color:var(--muted); font-weight:600; padding-right:2px; }
   table.calc td:last-child { text-align:right; white-space:nowrap; font-weight:600; width:70px; }
+  table.calc .hint { display:block; color:var(--muted); font-size:12px; font-weight:normal; }
   table.calc tr.info td { color:var(--muted); font-style:italic; }
+  table.calc tr.ok td { color:var(--muted); } table.calc tr.ok td:last-child { color:var(--good); }
   table.calc tr.cap td { color:var(--warn); }
   table.calc tr.up td { color:#1849a9; }
-  table.calc tr.final td { border-bottom:none; background:#ecfdf3; color:var(--good); }
+  table.calc tr.final td { border-bottom:none; background:#ecfdf3; color:var(--good); font-weight:700; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .chip { background:#f2f4f7; border-radius:999px; padding:2px 9px; font-size:12px; }
+  .chip.warn { background:#fef0c7; color:#93370d; }
   /* Today's checklist pop-up */
   .modal { position:fixed; inset:0; background:rgba(16,24,40,.45); display:flex; align-items:flex-start; justify-content:center; z-index:50; padding:60px 16px; overflow:auto; }
   .modal[hidden] { display:none; }
@@ -423,24 +430,59 @@
     const names = [...new Set(g.map((s) => s.details && s.details.comp && s.details.comp.name).filter(Boolean))];
     const follow = [...new Set(g.map((s) => infoOf(s, /, so we follow /)).filter(Boolean).map((c) => "backup: " + c.t.split(", so we follow")[0]))];
     if (names.length) parts.push(`<span><span class="k">Competitor we follow</span><b>${esc(names.join(", "))}</b>${follow.length ? ` <span class="help">(${esc(follow.join("; "))})</span>` : ""}</span>`);
-    if (s0.details) parts.push(`<span><span class="k">Event</span>${d.event ? `<b>${esc(d.event)}</b>` : d.smallEvent ? `None that counts <span class="help">(${esc(d.smallEvent)})</span>` : "None"}</span>`);
+    // Every relevant event that night with Medium to High demand (Ann, 19 Nov), not just the top one.
+    const evs = d.events && d.events.length ? d.events : d.event ? [d.event] : [];
+    if (s0.details) parts.push(`<span><span class="k">Event${evs.length > 1 ? "s" : ""}</span>${evs.length ? evs.map((x) => `<b>${esc(x)}</b>`).join(' <span class="help">·</span> ') : d.smallEvent ? `None that counts <span class="help">(${esc(d.smallEvent)})</span>` : "None"}</span>`);
     const offers = new Map();
     for (const s of g) { const c = s.details && s.details.comp; if (c) { const key = [c.name, c.cat, c.room, c.price, c.channel].join("|"); if (!offers.has(key)) offers.set(key, c); } }
     const off = [...offers.values()].map((c) => `<div><b>${money(c.price)}</b> ${names.length > 1 ? esc(c.name) + ": " : ""}${esc(c.room || "")}${c.cat ? ` (${esc(c.cat)})` : ""}` +
       (c.channel ? ` <span class="help">· ${esc(c.channel)}${c.channels && c.channels.length > 1 ? `, cheapest of ${c.channels.length} channels` : ""}${c.taxAdded ? ", taxes added" : ""}</span>` : "") + "</div>").join("");
     return `<tr class="gh"><td colspan="7"><div class="ghbar">${parts.join("")}</div>${off ? `<div class="ghoff"><span class="k">Their price${offers.size > 1 ? "s" : ""}</span><div>${off}</div></div>` : ""}</td></tr>`;
   }
-  // The price worked out step by step. In the Suggestions blocks the slow-date and backup lines are in the block's header, so they are left out here.
-  function calcTable(s, all) {
+  // The price worked out step by step (Ann, 19 Nov): numbered steps that name the rooms, a tick for each check that passed,
+  // and one green line with the new price. The slow-date and backup notes are shown as labels above the table, so not repeated in it.
+  const isLabel = (c) => c.k === "info" && (/^Slow date:/.test(c.t) || /, so we follow /.test(c.t));
+  function calcTable(s) {
     const calc = s.details && s.details.calc;
     if (!calc || !calc.length) return "";
-    const rows = all ? calc : calc.filter((c) => !(c.k === "info" && (/^Slow date:/.test(c.t) || /, so we follow /.test(c.t))));
-    let h = rows.map((c) => `<tr class="${c.k || ""}"><td>${esc(c.t)}</td><td>${c.p != null ? money(c.p) : ""}</td></tr>`).join("");
-    const fin = calc[calc.length - 1];
-    if (fin && fin.p != null && s.suggested_rate != null && Math.round(fin.p) !== Math.round(Number(s.suggested_rate))) h = h.replace(/ class="final"/g, "") + `<tr class="final"><td>Change too small, so today's price stays</td><td>${money(s.suggested_rate)}</td></tr>`;
+    let n = 0, h = "";
+    for (const c of calc) {
+      if (isLabel(c) || c.t === "Suggested price") continue;
+      const hint = c.h ? `<span class="hint">${esc(c.h)}</span>` : "";
+      if (c.k === "ok") h += `<tr class="ok"><td class="n">✓</td><td>${esc(c.t)}${hint}</td><td>OK</td></tr>`;
+      else if (c.p == null) h += `<tr class="info"><td class="n">i</td><td>${esc(c.t)}${hint}</td><td></td></tr>`;
+      else h += `<tr class="${c.k === "cap" || c.k === "up" ? c.k : ""}"><td class="n">${++n}</td><td>${esc(c.t)}${hint}</td><td>${money(c.p)}</td></tr>`;
+    }
+    const last = [...calc].reverse().find((c) => c.p != null);
+    const sug = s.suggested_rate != null ? Number(s.suggested_rate) : null;
+    if (last && sug != null && Math.round(last.p) !== Math.round(sug)) h += '<tr class="ok"><td class="n">✓</td><td>The change is too small, so today\'s price stays</td><td>OK</td></tr>';
+    const cur = Number(s.current_rate ?? 0), diff = Math.round((sug ?? cur) - cur);
+    const label = s.final_rate != null && sug != null && Math.round(Number(s.final_rate)) !== Math.round(sug) ? "Suggested price" : "New price";
+    h += `<tr class="final"><td class="n">=</td><td>${label} (was ${money(cur)}, ${diff ? signed(diff) : "no change"})</td><td>${money(sug)}</td></tr>`;
     return `<table class="calc">${h}</table>`;
   }
-  const calcText = (s) => ((s.details && s.details.calc) || []).map((c) => c.t + (c.p != null ? ": " + money(c.p) : "")).join("\n");
+  // The facts behind a price, once, as labels (used in the Log; the Suggestions blocks show them in the block's header).
+  function factChips(s) {
+    const d = s.details; if (!d) return "";
+    const slow = (d.calc || []).find((c) => c.k === "info" && /^Slow date:/.test(c.t));
+    const backup = (d.calc || []).find((c) => c.k === "info" && /, so we follow /.test(c.t));
+    const evs = d.events && d.events.length ? d.events : d.event ? [d.event] : [];
+    const chips = [];
+    if (d.occ != null) chips.push(`<span class="chip${slow ? " warn" : ""}"><b>Hotel ${Math.round(d.occ * 100)}% booked</b>${slow ? " · slow date" : ""}</span>`);
+    if (d.left != null) chips.push(`<span class="chip">Room type: <b>${d.left}${d.units ? " of " + d.units : ""} left</b></span>`);
+    chips.push(`<span class="chip">Event: ${evs.length ? evs.map((x) => `<b>${esc(x)}</b>`).join(" · ") : d.smallEvent ? "none that counts" : "none"}</span>`);
+    if (d.comp) chips.push(`<span class="chip">Competitor: <b>${esc(d.comp.name)}</b>${backup ? ` (backup: ${esc(backup.t.split(", so we follow")[0])})` : ""}</span>`);
+    return `<div class="chips">${chips.join("")}</div>`;
+  }
+  const calcText = (s) => {
+    let n = 0; const lines = [];
+    for (const c of (s.details && s.details.calc) || []) {
+      if (c.t === "Suggested price") continue;
+      lines.push(c.k === "ok" ? "✓ " + c.t : c.p == null ? c.t : `${++n}. ${c.t}: ${money(c.p)}` + (c.h ? ` (${c.h})` : ""));
+    }
+    if (lines.length && s.suggested_rate != null) lines.push(`= New price: ${money(s.suggested_rate)}`);
+    return lines.join("\n");
+  };
   const fullWhy = (s) => `<details><summary class="help">Full explanation</summary><div class="help">${esc(s.reason || "")}</div></details>`;
   // The Why split into columns (Ann, 18 Nov). Suggestions made before 18 Nov have no details: those show the full Why only.
   const DASH = '<span class="muted">—</span>';
@@ -456,7 +498,7 @@
       chNote: c ? [c.channels && c.channels.length > 1 ? `lowest of ${c.channels.length} channels` : "", c.taxAdded ? "taxes added" : ""].filter(Boolean).join(", ") : "",
       theirRoom: c && c.room ? c.room : "", cat: c && c.cat ? c.cat : "",
       theirPrice: c ? Number(c.price) : null,
-      event: d.event || "", small: d.small || d.smallEvent || "",
+      event: (d.events && d.events.length ? d.events.join("; ") : d.event) || "", small: d.small || d.smallEvent || "",
       note: d.note || "",
     };
   }
@@ -697,7 +739,7 @@
   let pdfReady = null;
   const loadPdfLibs = () => (pdfReady = pdfReady || (async () => { for (const [src, sri] of PDF_LIBS) await loadScript(src, sri); })().catch((e) => { pdfReady = null; throw e; }));
   // The PDF's built-in font covers Western European letters only: simplify anything else.
-  const pdfText = (v) => String(v ?? "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/…/g, "...")
+  const pdfText = (v) => String(v ?? "").replace(/✓/g, "OK:").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/…/g, "...")
     .normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^\x09\x0A\x20-\x7E\xA0-\xFF]/g, "?");
   async function exportPdf() {
     if (!shown.length) return say("Nothing to export: no suggestions are shown.", true);
@@ -838,7 +880,7 @@
         <td class="num">${money(s.current_rate)}</td><td class="num"><b>${r.price != null ? money(r.price) : DASH}</b></td>
         <td class="num ${r.diff > 0 ? "up" : r.diff < 0 ? "down" : ""}">${r.price != null ? signed(r.diff) : DASH}${r.diff <= -BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
         <td>${esc(r.decision)}</td><td class="w">${esc(r.cb)}</td>
-        <td class="record">${calcTable(s, true) || (r.note ? `<b>${esc(r.note)}</b>` : "")}${r.facts ? `<div class="rec-facts">${esc(r.facts)}</div>` : ""}<div class="rec-why">${esc(s.reason || "")}</div>${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}${s.decision_note ? `<div class="reconf">${esc(s.decision_note)}</div>` : ""}</td></tr>`;
+        <td class="record">${s.details && s.details.calc ? factChips(s) + calcTable(s) + fullWhy(s) : (r.note ? `<b>${esc(r.note)}</b>` : "") + (r.facts ? `<div class="rec-facts">${esc(r.facts)}</div>` : "") + `<div class="rec-why">${esc(s.reason || "")}</div>`}${s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : ""}${s.decision_note ? `<div class="reconf">${esc(s.decision_note)}</div>` : ""}</td></tr>`;
     }).join("");
   }
   // One price decision as a record: who, when, what changed, and the facts behind it.
