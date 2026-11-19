@@ -66,6 +66,9 @@
   table.calc tr.cap td { color:var(--warn); }
   table.calc tr.up td { color:#1849a9; }
   table.calc tr.final td { border-bottom:none; background:#ecfdf3; color:var(--good); font-weight:700; }
+  #suggTable tr.keep > td { background:#f6f7f9; color:var(--muted); }
+  #suggTable tr.keep table.calc tr.final td { background:#eef0f3; color:#475467; }
+  .keepnote { display:inline-block; padding:4px 10px; border-radius:8px; background:#eef0f3; color:#475467; font-weight:600; }
   .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
   .chip { background:#f2f4f7; border-radius:999px; padding:2px 9px; font-size:12px; }
   .chip.warn { background:#fef0c7; color:#93370d; }
@@ -160,6 +163,7 @@
       <label style="margin:0">Property <select id="fProp"><option value="">All</option><option>BQQ</option><option>KG</option><option>CN</option></select></label>
       <label style="margin:0">Show <select id="fStatus"><option value="todo">To do: decide or send</option><option value="">Everything today</option><option value="approved,changed">Approved or changed</option><option value="rejected">Rejected</option><option value="sent,failed">Sent, or could not send</option></select></label>
       <label style="margin:0">Nights <select id="fDays"><option value="7">Next 7 days</option><option value="14">Next 14 days</option><option value="30" selected>Next 30 days</option><option value="90">All 90 days</option></select></label>
+      <label style="margin:0"><input type="checkbox" id="fKeep" checked> Show rooms with no change</label>
       <button id="approveAll">Approve all shown</button>
       <button id="sendAll" class="primary" hidden>Send approved shown</button>
       <select id="exportFmt" title="Download the suggestions shown, as Excel or PDF"><option value="" selected>Export…</option><option value="xlsx">Excel (.xlsx)</option><option value="pdf">PDF</option></select>
@@ -397,9 +401,13 @@
       if (!data || data.length < 1000) break;
     }
     shown = all.filter((s) => s.stay_date <= last);
-    const ups = shown.filter((s) => s.suggested_rate > s.current_rate).length, downs = shown.filter((s) => s.suggested_rate < s.current_rate).length;
     const later = all.length - shown.length;
-    $("suggCount").textContent = `Showing ${shown.length}: ${ups} up, ${downs} down, ${shown.filter((s) => s.flags).length} flagged.` + (later ? ` ${later} more further ahead (choose "All 90 days" to see them).` : "");
+    const keeps = shown.filter(isKeep).length;
+    if (!$("fKeep").checked) shown = shown.filter((s) => !isKeep(s));
+    const ups = shown.filter((s) => s.suggested_rate > s.current_rate).length, downs = shown.filter((s) => s.suggested_rate < s.current_rate).length;
+    $("suggCount").textContent = `Showing ${shown.length}: ${ups} up, ${downs} down, ${shown.filter((s) => s.flags).length} flagged` +
+      (keeps ? ($("fKeep").checked ? `, ${keeps} with no change (greyed out: nothing to approve, never sent).` : `. ${keeps} rooms with no change hidden.`) : ".") +
+      (later ? ` ${later} more further ahead (choose "All 90 days" to see them).` : "");
     if (!shown.length) { $("suggTable").innerHTML = '<tr><td class="muted">No suggestions here for today yet.</td></tr>'; return; }
     // One block per night and property: the shared facts once at the top, then each room with its price worked out step by step.
     const groups = [];
@@ -407,16 +415,19 @@
     const sub = '<tr class="sub"><th>Our room</th><th>Room type booked</th><th class="num">Now</th><th class="num">Suggested</th><th class="num">Change</th><th>How we got the price</th><th>Decision</th></tr>';
     $("suggTable").innerHTML = groups.map((g) => groupHead(g) + sub + g.map((s) => {
       const diff = (s.suggested_rate ?? 0) - (s.current_rate ?? 0);
-      const dec = s.status === "pending"
+      const keep = isKeep(s);
+      const dec = keep && s.status === "pending"
+        ? `<span class="keepnote">Keep ${money(s.current_rate)}</span><div class="help">No change: nothing to approve, never sent to Cloudbeds.</div>`
+        : s.status === "pending"
         ? `<span class="actions"><button data-a="approve" data-id="${s.id}">Approve</button> <button data-a="change" data-id="${s.id}">Change</button> <button data-a="reject" data-id="${s.id}">Reject</button></span>`
         : decisionCell(s);
       const d = s.details || {};
       const rt = d.left != null && d.units ? `${Math.round((1 - d.left / d.units) * 100)}%<div class="help">${d.left} of ${d.units} left</div>` : d.left != null ? `<div class="help">${d.left} left</div>` : DASH;
       const flag = s.flags ? `<div class="flag">⚑ ${esc(s.flags)}</div>` : "";
       const how = (calcTable(s) || (s.details ? `<div>${esc(d.note || "")}</div>` : `<div class="help">${esc(s.reason || "")}</div>`)) + (s.details ? fullWhy(s) : "");
-      return `<tr><td class="room">${esc(s.room_name)}</td><td>${rt}</td>
-        <td class="num">${money(s.current_rate)}</td><td class="num"><b>${money(s.suggested_rate)}</b></td>
-        <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${diff ? money(diff).replace("S$-", "-S$") : "0"}${-diff >= BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
+      return `<tr${keep ? ' class="keep"' : ""}><td class="room">${esc(s.room_name)}</td><td>${rt}</td>
+        <td class="num">${money(s.current_rate)}</td><td class="num">${keep ? "Keep " + money(s.current_rate) : `<b>${money(s.suggested_rate)}</b>`}</td>
+        <td class="num ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${keep ? "No change" : (diff > 0 ? "+" : "") + (diff ? money(diff).replace("S$-", "-S$") : "0")}${-diff >= BIG_DROP ? '<div><span class="pill bigdrop">Big drop</span></div>' : ""}</td>
         <td class="calcw">${how}${flag}</td><td>${dec}</td></tr>`;
     }).join("")).join("");
   }
@@ -441,6 +452,8 @@
   }
   // The price worked out step by step (Ann, 19 Nov): numbered steps that name the rooms, a tick for each check that passed,
   // and one green line with the new price. The slow-date and backup notes are shown as labels above the table, so not repeated in it.
+  // A room-night with no price change (Ann, 19 Nov): listed greyed out as "Keep", with its explanation, but nothing to approve or send.
+  const isKeep = (s) => !!(s.details && s.details.keep);
   const isLabel = (c) => c.k === "info" && (/^Slow date:/.test(c.t) || /, so we follow /.test(c.t));
   function calcTable(s) {
     const calc = s.details && s.details.calc;
@@ -458,7 +471,9 @@
     if (last && sug != null && Math.round(last.p) !== Math.round(sug)) h += '<tr class="ok"><td class="n">✓</td><td>The change is too small, so today\'s price stays</td><td>OK</td></tr>';
     const cur = Number(s.current_rate ?? 0), diff = Math.round((sug ?? cur) - cur);
     const label = s.final_rate != null && sug != null && Math.round(Number(s.final_rate)) !== Math.round(sug) ? "Suggested price" : "New price";
-    h += `<tr class="final"><td class="n">=</td><td>${label} (was ${money(cur)}, ${diff ? signed(diff) : "no change"})</td><td>${money(sug)}</td></tr>`;
+    h += isKeep(s) && !diff
+      ? `<tr class="final"><td class="n">=</td><td>Keep today's price (no change)</td><td>${money(cur)}</td></tr>`
+      : `<tr class="final"><td class="n">=</td><td>${label} (was ${money(cur)}, ${diff ? signed(diff) : "no change"})</td><td>${money(sug)}</td></tr>`;
     return `<table class="calc">${h}</table>`;
   }
   // The facts behind a price, once, as labels (used in the Log; the Suggestions blocks show them in the block's header).
@@ -480,7 +495,7 @@
       if (c.t === "Suggested price") continue;
       lines.push(c.k === "ok" ? "✓ " + c.t : c.p == null ? c.t : `${++n}. ${c.t}: ${money(c.p)}` + (c.h ? ` (${c.h})` : ""));
     }
-    if (lines.length && s.suggested_rate != null) lines.push(`= New price: ${money(s.suggested_rate)}`);
+    if (lines.length && s.suggested_rate != null) lines.push(isKeep(s) ? `= Keep today's price (no change): ${money(s.current_rate)}` : `= New price: ${money(s.suggested_rate)}`);
     return lines.join("\n");
   };
   const fullWhy = (s) => `<details><summary class="help">Full explanation</summary><div class="help">${esc(s.reason || "")}</div></details>`;
@@ -510,7 +525,7 @@
     const canSend = (s.status === "approved" || s.status === "changed") && !s.sent_at && sendMode !== "off";
     return label + at + who + sendNote + (canSend ? `<div style="margin-top:6px"><button class="primary" data-a="send" data-id="${s.id}">Send to Cloudbeds</button></div>` : "");
   }
-  $("fProp").onchange = loadSugg; $("fStatus").onchange = loadSugg; $("fDays").onchange = loadSugg;
+  $("fProp").onchange = loadSugg; $("fStatus").onchange = loadSugg; $("fDays").onchange = loadSugg; $("fKeep").onchange = loadSugg;
 
   function limitsFor(s) {
     const r = rooms.find((x) => x.cloudbeds_room_type_id === s.cloudbeds_room_type_id);
@@ -573,7 +588,7 @@
     } catch (err) { say("Could not save: " + err.message, true); }
   };
   $("approveAll").onclick = async () => {
-    const todo = shown.filter((s) => s.status === "pending");
+    const todo = shown.filter((s) => s.status === "pending" && !isKeep(s)); // rooms with no change have nothing to approve
     if (!todo.length) return;
     if (!confirm(`Approve all ${todo.length} suggestions shown?`)) return;
     let list = todo;
@@ -619,7 +634,7 @@
       night: s.stay_date, prop: s.property_code, room: s.room_name,
       now: s.current_rate == null ? null : Number(s.current_rate), sug: s.suggested_rate == null ? null : Number(s.suggested_rate),
       diff: Number(s.suggested_rate ?? 0) - Number(s.current_rate ?? 0),
-      status: s.status === "failed" ? "not sent" : s.status,
+      status: s.status === "failed" ? "not sent" : isKeep(s) && s.status === "pending" ? "no change (keep)" : s.status,
       final: s.final_rate != null && s.status !== "rejected" ? Number(s.final_rate) : null,
       why: s.reason || "", flags: s.flags || "", by: s.decided_by_email || "", at: s.decided_at ? fmtTime(s.decided_at) : "", c: cols(s), calc: calcText(s),
       send: s.send_message ? s.send_message + (s.sent_at ? " " + fmtTime(s.sent_at) : "") : "",
